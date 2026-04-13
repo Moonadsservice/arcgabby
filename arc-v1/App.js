@@ -92,12 +92,22 @@ export default function App() {
   const deepgramSocketRef = useRef(null);
   const deepgramClientRef = useRef(null);
 
+  // Helper for Deepgram client initialization
+  const getDeepgramClient = useCallback(() => {
+    if (deepgramClientRef.current) return deepgramClientRef.current;
+    const dg_key = DEEPGRAM_API_KEY || process.env.DEEPGRAM_API_KEY || process.env.EXPO_PUBLIC_DEEPGRAM_API_KEY;
+    if (dg_key && !dg_key.startsWith('YOUR_') && dg_key !== 'YOUR_DEEPGRAM_API_KEY') {
+      deepgramClientRef.current = createClient(dg_key);
+    }
+    return deepgramClientRef.current;
+  }, []);
+
   // Initialize Transcription (Deepgram or Web Speech)
   useEffect(() => {
     if (Platform.OS === 'web') {
-      const dg_key = DEEPGRAM_API_KEY || process.env.DEEPGRAM_API_KEY || process.env.EXPO_PUBLIC_DEEPGRAM_API_KEY;
+      const dgClient = getDeepgramClient();
       
-      if (!dg_key || dg_key.startsWith('YOUR_') || dg_key === 'YOUR_DEEPGRAM_API_KEY') {
+      if (!dgClient) {
         // Fallback to Web Speech API
         if (window.webkitSpeechRecognition || window.SpeechRecognition) {
           const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -144,17 +154,15 @@ export default function App() {
             }
           };
         }
-      } else {
-        // Initialize Deepgram client
-        deepgramClientRef.current = createClient(dg_key);
       }
     }
-  }, []);
+  }, [getDeepgramClient]);
 
   // Deepgram WebSocket Handlers
   const startDeepgramTranscription = async () => {
-    const dg_key = DEEPGRAM_API_KEY || process.env.DEEPGRAM_API_KEY || process.env.EXPO_PUBLIC_DEEPGRAM_API_KEY;
-    if (!dg_key || dg_key.startsWith('YOUR_') || dg_key === 'YOUR_DEEPGRAM_API_KEY') {
+    const dgClient = getDeepgramClient();
+    
+    if (!dgClient) {
       if (recognitionRef.current) {
         recognitionRef.current.start();
       }
@@ -165,11 +173,7 @@ export default function App() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaRecorderRef.current = new MediaRecorder(stream, { mimeType: 'audio/webm' });
       
-      if (!deepgramClientRef.current) {
-        deepgramClientRef.current = createClient(dg_key);
-      }
-
-      const connection = deepgramClientRef.current.listen.live({
+      const connection = dgClient.listen.live({
         smart_format: true,
         model: 'nova-2',
       });

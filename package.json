@@ -1,0 +1,9 @@
+{
+  "name": "arc-root",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "cd arc-v1 && npm install && npm run build:web",
+    "install": "cd arc-v1 && npm install"
+  }
+}

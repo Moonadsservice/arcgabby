@@ -1,4 +1,7 @@
 {
+  "version": 2,
+  "public": true,
+  "name": "arc-v1",
   "rewrites": [
     {
       "source": "/(.*)",

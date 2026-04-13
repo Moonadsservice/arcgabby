@@ -16,7 +16,9 @@ import {
   Pressable
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { OPENAI_API_KEY } from '@env';
+import { EXA_API_KEY, DEEPGRAM_API_KEY } from '@env';
+import Exa from 'exa-js';
+import { createClient } from '@deepgram/sdk';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 // import { OneSignal } from 'react-native-onesignal'; // Moved to dynamic import for web compatibility
 import * as Print from 'expo-print';
@@ -55,9 +57,11 @@ export default function App() {
   const [currentSessionName, setCurrentSessionName] = useState('New Session');
   const [notifications, setNotifications] = useState([]); // Facebook-style notification tray
   const [showNotifications, setShowNotifications] = useState(false); // Notification tray toggle
+  const [summaryFormat, setSummaryFormat] = useState('Professional Summary'); // Custom summary format instructions
   const [showFeedback, setShowFeedback] = useState(false); // Feedback modal toggle
   const [feedbackText, setFeedbackText] = useState(''); // Feedback input
   const [showSettings, setShowSettings] = useState(false); // Settings modal toggle
+  const [isVoiceEnabled, setIsVoiceEnabled] = useState(true); // Voice toggle state
   
   // Animation values for landing page
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -84,60 +88,134 @@ export default function App() {
   const isSessionActiveRef = useRef(false);
   const scrollViewRef = useRef(null);
   const recognitionRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const deepgramSocketRef = useRef(null);
 
-  // Initialize Web Speech API
+  // Initialize Transcription (Deepgram or Web Speech)
   useEffect(() => {
-    if (Platform.OS === 'web' && (window.webkitSpeechRecognition || window.SpeechRecognition)) {
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      recognitionRef.current = new SpeechRecognition();
-      recognitionRef.current.continuous = true;
-      recognitionRef.current.interimResults = true;
-      recognitionRef.current.lang = 'en-US';
+    if (Platform.OS === 'web') {
+      const dg_key = DEEPGRAM_API_KEY || (process.env.DEEPGRAM_API_KEY || process.env.EXPO_PUBLIC_DEEPGRAM_API_KEY);
+      
+      if (!dg_key || dg_key === 'YOUR_DEEPGRAM_API_KEY') {
+        // Fallback to Web Speech API
+        if (window.webkitSpeechRecognition || window.SpeechRecognition) {
+          const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+          recognitionRef.current = new SpeechRecognition();
+          recognitionRef.current.continuous = true;
+          recognitionRef.current.interimResults = true;
+          recognitionRef.current.lang = 'en-US';
 
-      recognitionRef.current.onstart = () => {
-        setStatus('Listening...');
-        setIsRecording(true);
-      };
+          recognitionRef.current.onstart = () => {
+            setStatus('Listening...');
+            setIsRecording(true);
+          };
 
-      recognitionRef.current.onresult = (event) => {
-        const transcript = Array.from(event.results)
-          .map(result => result[0])
-          .map(result => result.transcript)
-          .join('');
-        setCurrentTranscription(transcript);
-      };
+          recognitionRef.current.onresult = (event) => {
+            const transcript = Array.from(event.results)
+              .map(result => result[0])
+              .map(result => result.transcript)
+              .join('');
+            setCurrentTranscription(transcript);
+          };
 
-      recognitionRef.current.onerror = (event) => {
-        console.error('Speech recognition error:', event.error);
-        if (event.error === 'not-allowed') {
-          setError('Microphone access denied.');
-        } else {
-          setError(`Transcription error: ${event.error}`);
+          recognitionRef.current.onerror = (event) => {
+            console.error('Speech recognition error:', event.error);
+            if (event.error === 'not-allowed') {
+              setError('Microphone access denied.');
+            } else {
+              setError(`Transcription error: ${event.error}`);
+            }
+            setIsSessionActive(false);
+            isSessionActiveRef.current = false;
+            setStatus('Ready');
+          };
+
+          recognitionRef.current.onend = () => {
+            if (isSessionActiveRef.current) {
+              try {
+                recognitionRef.current.start();
+              } catch (e) {
+                console.log('Recognition restart failed:', e);
+              }
+            } else {
+              setIsRecording(false);
+              setStatus('Ready');
+            }
+          };
         }
-        setIsSessionActive(false);
-        isSessionActiveRef.current = false;
-        setStatus('Ready');
-      };
-
-      recognitionRef.current.onend = () => {
-        if (isSessionActiveRef.current) {
-          try {
-            recognitionRef.current.start();
-          } catch (e) {
-            console.log('Recognition restart failed:', e);
-          }
-        } else {
-          setIsRecording(false);
-          setStatus('Ready');
-        }
-      };
-    } else if (Platform.OS === 'web') {
-      console.warn('Speech recognition not supported in this browser.');
+      }
     }
   }, []);
 
+  // Deepgram WebSocket Handlers
+  const startDeepgramTranscription = async () => {
+    const dg_key = DEEPGRAM_API_KEY || (process.env.DEEPGRAM_API_KEY || process.env.EXPO_PUBLIC_DEEPGRAM_API_KEY);
+    if (!dg_key || dg_key === 'YOUR_DEEPGRAM_API_KEY') {
+      if (recognitionRef.current) {
+        recognitionRef.current.start();
+      }
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaRecorderRef.current = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      
+      const socket = new WebSocket('wss://api.deepgram.com/v1/listen?smart_format=true', [
+        'token',
+        dg_key,
+      ]);
+
+      socket.onopen = () => {
+        setStatus('Listening (Deepgram)...');
+        setIsRecording(true);
+        mediaRecorderRef.current.addEventListener('dataavailable', (event) => {
+          if (event.data.size > 0 && socket.readyState === 1) {
+            socket.send(event.data);
+          }
+        });
+        mediaRecorderRef.current.start(250);
+      };
+
+      socket.onmessage = (message) => {
+        const received = JSON.parse(message.data);
+        const transcript = received.channel.alternatives[0].transcript;
+        if (transcript && received.is_final) {
+          setCurrentTranscription(prev => prev + ' ' + transcript);
+        }
+      };
+
+      socket.onclose = () => {
+        setIsRecording(false);
+        setStatus('Ready');
+      };
+
+      deepgramSocketRef.current = socket;
+    } catch (err) {
+      console.error('Deepgram failed:', err);
+      setError('Microphone access or Deepgram error.');
+      setIsSessionActive(false);
+      isSessionActiveRef.current = false;
+    }
+  };
+
+  const stopDeepgramTranscription = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+      mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+    }
+    if (deepgramSocketRef.current) {
+      deepgramSocketRef.current.close();
+    }
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+    }
+  };
+
   // Helper for Speech Synthesis (TTS)
   const speakText = (text) => {
+    if (!isVoiceEnabled) return; // Exit if voice is disabled
+
     if (Platform.OS === 'web' && window.speechSynthesis) {
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
@@ -147,85 +225,103 @@ export default function App() {
         console.error('Speech synthesis error:', e);
         setStatus('Ready');
       };
+      
       const voices = window.speechSynthesis.getVoices();
-      const selectedVoice = personality === 'Jenny' 
-        ? voices.find(v => v.name.includes('Female') || v.name.includes('Google US English'))
-        : voices.find(v => v.name.includes('Google UK English Female') || v.name.includes('Samantha'));
+      
+      // Strict Female voice for Jenny, Male voice for Gabby
+      let selectedVoice = null;
+      if (personality === 'Jenny') {
+        // Prioritize known high-quality female voices
+        selectedVoice = voices.find(v => 
+          v.name.toLowerCase().includes('female') || 
+          v.name.includes('Microsoft Zira') || 
+          v.name.includes('Samantha') || 
+          (v.name.includes('Google') && v.name.includes('US English') && !v.name.toLowerCase().includes('male'))
+        );
+      } else {
+        // Prioritize known high-quality male voices
+        selectedVoice = voices.find(v => 
+          v.name.toLowerCase().includes('male') || 
+          v.name.includes('Microsoft David') || 
+          v.name.includes('Daniel') || 
+          (v.name.includes('Google') && v.name.includes('UK English Male'))
+        );
+      }
+      
       if (selectedVoice) utterance.voice = selectedVoice;
       window.speechSynthesis.speak(utterance);
     }
   };
 
-  // Helper for AI Response (Gemini API)
+  // Helper for AI Response (Exa Brain)
   const getAIResponse = async (userText) => {
-    setStatus('Processing...');
+    setStatus('Exa Reasoning...');
+    
+    // Environment variables with Vercel/Expo fallbacks
+    const exa_key = EXA_API_KEY || (Platform.OS === 'web' ? (process.env.EXA_API_KEY || process.env.EXPO_PUBLIC_EXA_API_KEY) : null);
+
     try {
-      if (!OPENAI_API_KEY || OPENAI_API_KEY === 'YOUR_OPENAI_API_KEY') {
-        return `[Test Mode] I heard you say: "${userText}". Please set your Gemini API key in .env to enable real AI responses.`;
+      if (!exa_key || exa_key === 'YOUR_EXA_API_KEY') {
+        return `[Test Mode] I heard you say: "${userText}". Please set your EXA_API_KEY in .env to enable my brain.`;
       }
 
-      // Retrieve Memory and Inject into AI Prompt
+      // Initialize Exa
+      const exa = new Exa(exa_key);
+
+      // Retrieve Memory for Context
       let memoryPrompt = "";
       try {
         const { success, data: memories } = await searchMemory(userText);
         if (success && memories && memories.length > 0) {
-          memoryPrompt = "\n\nHere are relevant past memories:\n" + 
-            memories.map(m => `- [${m.type}] ${m.title}: ${m.content.substring(0, 300)}...`).join('\n');
+          memoryPrompt = "Relevant past memories: " + 
+            memories.map(m => `[${m.type}] ${m.title}: ${m.content.substring(0, 100)}`).join('; ');
         }
       } catch (memError) {
         console.error('Memory retrieval failed:', memError);
       }
 
-      const baseSystemPrompt = isDualMode
-            ? 'You are ARC in Dual Mode, combining the efficiency of Jenny and the warmth of Gabby. Provide professional, task-oriented help while maintaining a friendly and engaging tone.'
-            : (personality === 'Jenny' 
-                ? 'You are Jenny, a task-oriented assistant focused on efficiency and summaries.' 
-                : 'You are Gabby, a friendly and conversational assistant.');
+      const systemPrompt = `You are ARC, an Autonomous Reasoning Companion. 
+      Personality: ${isDualMode ? 'Dual (Efficiency + Warmth)' : (personality === 'Jenny' ? 'Jenny (Efficient Female)' : 'Gabby (Friendly Male)')}.
+      ${memoryPrompt}
+      Current Task/Format: ${summaryFormat}
+      
+      Respond directly to the user's query using your reasoning and search capabilities. 
+      Do NOT repeat the user's words. Be concise and professional.`;
 
-      const systemPrompt = baseSystemPrompt + memoryPrompt;
-
-      // Gemini API call structure
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${OPENAI_API_KEY}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              role: 'user',
-              parts: [{ text: `System Instruction: ${systemPrompt}\n\nUser: ${userText}` }]
-            }
-          ],
-          generationConfig: {
-            maxOutputTokens: 1000,
-            temperature: 0.7,
-          }
-        }),
+      // Use Exa's Search + Contents to generate a reasoned response
+      // Since Exa is now the "brain", we use its search results as the basis for the answer
+      const searchResult = await exa.searchAndContents(userText, {
+        numResults: 3,
+        useAutoprompt: true,
+        highlights: true,
+        text: true
       });
 
-      const data = await response.json();
-      
-      if (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts[0]) {
-        let aiText = data.candidates[0].content.parts[0].text;
+      let aiText = "";
+      if (searchResult.results && searchResult.results.length > 0) {
+        // Synthesis of search results into a "brain" response
+        const bestResult = searchResult.results[0];
+        aiText = bestResult.highlights?.[0] || bestResult.text?.substring(0, 500) || "I found some information but couldn't summarize it perfectly.";
         
-        // Agentic Task Check (Background execution)
-        const taskResult = await executeBackgroundTask(userText, aiText);
-        
-        // Auto-save important AI outputs
-        if (userText.toLowerCase().includes('note down') || userText.toLowerCase().includes('save this note')) {
-          await autoSaveMemory(`Note: ${userText.substring(0, 30)}...`, aiText, 'note');
-        }
-
-        return aiText + taskResult;
+        // Add source for transparency
+        aiText += `\n\n(Source: ${bestResult.title})`;
       } else {
-        console.error('Gemini API Error details:', data);
-        throw new Error(data.error?.message || 'Failed to get AI response from Gemini');
+        aiText = "I searched my brain but couldn't find a specific answer for that. Could you rephrase?";
       }
+
+      // Agentic Task Check (Background execution)
+      const taskResult = await executeBackgroundTask(userText, aiText);
+      
+      // Auto-save important AI outputs
+      if (userText.toLowerCase().includes('note down') || userText.toLowerCase().includes('save this note')) {
+        await autoSaveMemory(`Note: ${userText.substring(0, 30)}...`, aiText, 'note');
+      }
+
+      return aiText + taskResult;
     } catch (err) {
-      console.error('AI API Error:', err);
-      setError(`AI API Error: ${err.message}`);
-      return "I'm sorry, I'm having trouble connecting to my brain right now.";
+      console.error('Exa Brain Error:', err);
+      setError(`Exa Brain Error: ${err.message}`);
+      return "I'm sorry, my Exa brain is having trouble connecting right now.";
     }
   };
 
@@ -245,27 +341,15 @@ export default function App() {
   };
 
   // Toggle Session (Mic Button)
-  const toggleSession = () => {
+  const toggleSession = async () => {
     const nextActive = !isSessionActive;
     setIsSessionActive(nextActive);
     isSessionActiveRef.current = nextActive;
 
     if (nextActive) {
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.start();
-        } catch (e) {
-          console.error('Recognition start failed:', e);
-        }
-      } else {
-        setError('Speech recognition not supported.');
-        setIsSessionActive(false);
-        isSessionActiveRef.current = false;
-      }
+      await startDeepgramTranscription();
     } else {
-      if (recognitionRef.current) {
-        recognitionRef.current.stop();
-      }
+      stopDeepgramTranscription();
       if (currentTranscription.trim()) {
         handleSendMessage(currentTranscription);
         setCurrentTranscription('');
@@ -312,60 +396,36 @@ export default function App() {
     console.log(`[Notification] ${title}: ${message}`, payload);
   };
 
-  // Helper for summarizing YouTube chunks
+  // Helper for summarizing YouTube chunks (Exa Brain version)
   const summarizeYouTubeVideo = async (url) => {
+    const exa_key = EXA_API_KEY || (Platform.OS === 'web' ? (process.env.EXA_API_KEY || process.env.EXPO_PUBLIC_EXA_API_KEY) : null);
     try {
       setStatus('Fetching Transcript...');
       const videoId = extractVideoId(url);
       if (!videoId) throw new Error('Invalid YouTube URL.');
 
-      const chunks = await fetchTranscriptChunks(videoId, 300);
-      
-      for (let i = 0; i < chunks.length; i++) {
-        const chunk = chunks[i];
-        await saveMemory({
-          title: `Raw Transcript: ${videoId} (Part ${i + 1})`,
-          content: chunk.text,
-          type: 'raw_transcript',
-          tags: ['youtube', 'raw', videoId],
-          metadata: { videoId, part: i + 1, start: chunk.start, end: chunk.end }
-        });
+      // Since Exa is the brain, we use Exa to find information and summaries about this video
+      setStatus('Exa Reasoning about Video...');
+      const exa = new Exa(exa_key);
+      const searchResult = await exa.searchAndContents(`summary of youtube video ${url}`, {
+        numResults: 1,
+        useAutoprompt: true,
+        highlights: true,
+        text: true
+      });
+
+      let finalSummary = "";
+      if (searchResult.results && searchResult.results.length > 0) {
+        const result = searchResult.results[0];
+        finalSummary = result.highlights?.[0] || result.text?.substring(0, 1000) || "I found the video but couldn't generate a detailed summary using my Exa brain.";
+      } else {
+        finalSummary = "I couldn't find a detailed summary for this video in my knowledge base.";
       }
 
-      setStatus('Summarizing Chunks...');
-      const chunkSummaries = [];
-      
-      for (let i = 0; i < chunks.length; i++) {
-        const chunk = chunks[i];
-        const timestampRange = `[${formatTimestamp(chunk.start)} - ${formatTimestamp(chunk.end)}]`;
-        
-        const response = await fetch('https://api.openai.com/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${OPENAI_API_KEY}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            model: 'gpt-4o-mini',
-            messages: [
-              { role: 'system', content: 'You are a professional video summarizer. Summarize the following transcript chunk in 3-5 concise sentences. Focus on key insights and facts.' },
-              { role: 'user', content: `Timestamp: ${timestampRange}\nTranscript: ${chunk.text}` }
-            ],
-          }),
-        });
-
-        const data = await response.json();
-        if (data.choices && data.choices[0]) {
-          chunkSummaries.push(`### ${timestampRange}\n${data.choices[0].message.content}`);
-        }
-      }
-
-      setStatus('Combining Summaries...');
-      const finalSummary = chunkSummaries.join('\n\n');
-      const videoTitle = `Summary: Video ${videoId}`;
+      const videoTitle = `Exa Summary: Video ${videoId}`;
       await autoSaveMemory(videoTitle, finalSummary, 'youtube_summary', ['youtube', 'summary', videoId], { videoId });
 
-      sendNotification('YouTube Summary Ready', `Video summary for ${videoId} is now available.`, {
+      sendNotification('YouTube Summary Ready', `Exa has processed the video summary.`, {
         title: videoTitle,
         content: finalSummary,
         type: 'youtube_summary'
@@ -373,14 +433,14 @@ export default function App() {
 
       setMessages(prev => [...prev, { 
         role: 'assistant', 
-        content: `I've finished summarizing the video! Here's the breakdown:\n\n${finalSummary}\n\nWould you like to export this as a [PDF] or [DOC]?` 
+        content: `My Exa brain has analyzed the video:\n\n${finalSummary}\n\nWould you like to export this as a [PDF] or [DOC]?` 
       }]);
 
       setStatus('Ready');
       return finalSummary;
     } catch (err) {
-      console.error('YouTube Summarization Error:', err);
-      setError(`YouTube Summarization Error: ${err.message}`);
+      console.error('Exa Summarization Error:', err);
+      setError(`Exa Summarization Error: ${err.message}`);
       setStatus('Error');
       return null;
     }
@@ -410,23 +470,53 @@ export default function App() {
   // Helper to export as PDF
   const exportAsPDF = async (title, content) => {
     try {
-      if (Platform.OS === 'web') {
-        // Simple window.print fallback or alert for web if expo-print has issues
-        console.log('PDF Export requested on web:', title);
-      }
-      
       const htmlContent = `
         <html>
           <head>
             <style>
-              body { font-family: 'Helvetica'; padding: 20px; }
-              h1 { color: #3b82f6; }
-              p { line-height: 1.6; }
+              body { 
+                font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; 
+                padding: 40px; 
+                color: #1e293b;
+                line-height: 1.6;
+              }
+              .header {
+                border-bottom: 2px solid #3b82f6;
+                margin-bottom: 30px;
+                padding-bottom: 10px;
+              }
+              h1 { 
+                color: #3b82f6; 
+                margin: 0;
+                font-size: 28px;
+              }
+              .date {
+                color: #64748b;
+                font-size: 14px;
+                margin-top: 5px;
+              }
+              .content {
+                white-space: pre-wrap;
+              }
+              .footer {
+                margin-top: 50px;
+                border-top: 1px solid #e2e8f0;
+                padding-top: 10px;
+                font-size: 12px;
+                color: #94a3b8;
+                text-align: center;
+              }
             </style>
           </head>
           <body>
-            <h1>${title}</h1>
-            <p>${content.replace(/\n/g, '<br>')}</p>
+            <div class="header">
+              <h1>${title}</h1>
+              <div class="date">Generated by ARC on ${new Date().toLocaleDateString()}</div>
+            </div>
+            <div class="content">${content.replace(/\n/g, '<br>')}</div>
+            <div class="footer">
+              Autonomous Reasoning Companion (ARC)
+            </div>
           </body>
         </html>
       `;
@@ -473,15 +563,39 @@ export default function App() {
     }
   };
 
-  // Helper to export as DOC (HTML format saved as .doc)
+  // Helper to export as DOC
   const exportAsDOC = async (title, content) => {
     try {
       const htmlContent = `
         <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
-          <head><meta charset='utf-8'><title>${title}</title></head>
+          <head>
+            <meta charset='utf-8'>
+            <title>${title}</title>
+            <style>
+              body { 
+                font-family: 'Calibri', 'Arial', sans-serif; 
+                padding: 20pt; 
+              }
+              h1 { 
+                color: #3b82f6; 
+                font-size: 24pt;
+                border-bottom: 1px solid #3b82f6;
+              }
+              p { 
+                font-size: 11pt; 
+                line-height: 1.5; 
+              }
+            </style>
+          </head>
           <body>
             <h1>${title}</h1>
-            <p>${content.replace(/\n/g, '<br>')}</p>
+            <p style="color: #64748b; font-size: 10pt;">Generated on ${new Date().toLocaleDateString()}</p>
+            <div class="content">
+              ${content.split('\n').map(line => `<p>${line}</p>`).join('')}
+            </div>
+            <br><br>
+            <hr>
+            <p style="text-align: center; font-size: 9pt; color: #94a3b8;">Autonomous Reasoning Companion (ARC)</p>
           </body>
         </html>
       `;
@@ -639,16 +753,31 @@ export default function App() {
       return ` [Weather: 72°F and Sunny in ${city}]`;
     }
 
-    // Web Search
+    // Web Search via Exa
     if (text.includes('search') || text.includes('look up') || text.includes('what is') || text.includes('who is')) {
-      const query = text.split('search for ')[1] || text.split('look up ')[1] || 'something';
+      const query = text.split('search for ')[1] || text.split('look up ')[1] || userTranscription;
       const task = { id: Date.now().toString(), type: 'Web', description: `Searched for ${query}` };
       newTasks.push(task);
       
-      // STEP 5: Auto-save web search
-      await autoSaveMemory(`Search: ${query}`, `Search result for: ${query}`, 'web_search', ['web', 'search'], { query });
+      const exa_key = EXA_API_KEY || (Platform.OS === 'web' ? (process.env.EXA_API_KEY || process.env.EXPO_PUBLIC_EXA_API_KEY) : null);
+      let searchSummary = "Found results. Summarizing...";
       
-      return ` [Web Search: Found results for "${query}". Summarizing...]`;
+      if (exa_key && exa_key !== 'YOUR_EXA_API_KEY') {
+        try {
+          const exa = new Exa(exa_key);
+          const results = await exa.search(query, { numResults: 3 });
+          if (results.results && results.results.length > 0) {
+            searchSummary = `Found: ${results.results.map(r => r.title).join(', ')}`;
+          }
+        } catch (e) {
+          console.error('Exa background search failed', e);
+        }
+      }
+      
+      // Auto-save web search
+      await autoSaveMemory(`Search: ${query}`, searchSummary, 'web_search', ['web', 'search'], { query });
+      
+      return ` [Web Search: ${searchSummary}]`;
     }
 
       // YouTube Summarizer
@@ -964,12 +1093,6 @@ export default function App() {
                 >
                   <Ionicons name="sunny-outline" size={24} color={activeTool === 'Weather' ? "#fff" : "#fbbf24"} />
                 </TouchableOpacity>
-                <TouchableOpacity 
-                  onPress={() => setActiveTool(activeTool === 'Search' ? null : 'Search')} 
-                  style={[styles.quickToolItem, activeTool === 'Search' && styles.quickToolItemActive]}
-                >
-                  <Ionicons name="globe-outline" size={24} color={activeTool === 'Search' ? "#fff" : "#3b82f6"} />
-                </TouchableOpacity>
               </View>
             )}
             <TouchableOpacity 
@@ -1135,7 +1258,7 @@ export default function App() {
 
                 <ScrollView style={styles.settingsList}>
                   <View style={styles.settingsSection}>
-                    <Text style={styles.modalSectionLabel}>Appearance</Text>
+                    <Text style={styles.modalSectionLabel}>System Preferences</Text>
                     <TouchableOpacity 
                       onPress={() => setIsDarkMode(!isDarkMode)} 
                       style={[styles.settingsItem, { backgroundColor: isDarkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}
@@ -1148,6 +1271,34 @@ export default function App() {
                         <View style={[styles.toggleDot, isDarkMode && styles.toggleDotActive]} />
                       </View>
                     </TouchableOpacity>
+
+                    <TouchableOpacity 
+                      onPress={() => setIsVoiceEnabled(!isVoiceEnabled)} 
+                      style={[styles.settingsItem, { backgroundColor: isDarkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)', marginTop: 8 }]}
+                    >
+                      <View style={styles.settingsItemLeft}>
+                        <Ionicons name={isVoiceEnabled ? "volume-high" : "volume-mute"} size={22} color="#3b82f6" />
+                        <Text style={[styles.settingsItemText, { color: isDarkMode ? '#fff' : '#1e293b' }]}>AI Voice Response</Text>
+                      </View>
+                      <View style={[styles.toggleSwitch, isVoiceEnabled && styles.toggleSwitchActive]}>
+                        <View style={[styles.toggleDot, isVoiceEnabled && styles.toggleDotActive]} />
+                      </View>
+                    </TouchableOpacity>
+                  </View>
+
+                  <View style={styles.settingsSection}>
+                    <Text style={styles.modalSectionLabel}>Summary Customization</Text>
+                    <View style={[styles.settingsItem, { flexDirection: 'column', alignItems: 'flex-start', padding: 15, backgroundColor: isDarkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
+                      <Text style={[styles.settingsItemText, { color: isDarkMode ? '#fff' : '#1e293b', marginBottom: 10 }]}>Default Summary Format</Text>
+                      <TextInput
+                        style={[styles.settingsInput, { color: isDarkMode ? '#fff' : '#1e293b', borderColor: isDarkMode ? '#334155' : '#e2e8f0', width: '100%', borderWidth: 1, borderRadius: 8, padding: 10 }]}
+                        placeholder="e.g., School notes, High-impact bullets..."
+                        placeholderTextColor="#94a3b8"
+                        value={summaryFormat}
+                        onChangeText={setSummaryFormat}
+                      />
+                      <Text style={{ fontSize: 10, color: '#94a3b8', marginTop: 8 }}>Used for YouTube & Web Search summaries.</Text>
+                    </View>
                   </View>
 
                   <View style={styles.settingsSection}>

@@ -90,13 +90,14 @@ export default function App() {
   const recognitionRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const deepgramSocketRef = useRef(null);
+  const deepgramClientRef = useRef(null);
 
   // Initialize Transcription (Deepgram or Web Speech)
   useEffect(() => {
     if (Platform.OS === 'web') {
-      const dg_key = DEEPGRAM_API_KEY || (process.env.DEEPGRAM_API_KEY || process.env.EXPO_PUBLIC_DEEPGRAM_API_KEY);
+      const dg_key = DEEPGRAM_API_KEY || process.env.DEEPGRAM_API_KEY || process.env.EXPO_PUBLIC_DEEPGRAM_API_KEY;
       
-      if (!dg_key || dg_key === 'YOUR_DEEPGRAM_API_KEY') {
+      if (!dg_key || dg_key.startsWith('YOUR_') || dg_key === 'YOUR_DEEPGRAM_API_KEY') {
         // Fallback to Web Speech API
         if (window.webkitSpeechRecognition || window.SpeechRecognition) {
           const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -143,14 +144,17 @@ export default function App() {
             }
           };
         }
+      } else {
+        // Initialize Deepgram client
+        deepgramClientRef.current = createClient(dg_key);
       }
     }
   }, []);
 
   // Deepgram WebSocket Handlers
   const startDeepgramTranscription = async () => {
-    const dg_key = DEEPGRAM_API_KEY || (process.env.DEEPGRAM_API_KEY || process.env.EXPO_PUBLIC_DEEPGRAM_API_KEY);
-    if (!dg_key || dg_key === 'YOUR_DEEPGRAM_API_KEY') {
+    const dg_key = DEEPGRAM_API_KEY || process.env.DEEPGRAM_API_KEY || process.env.EXPO_PUBLIC_DEEPGRAM_API_KEY;
+    if (!dg_key || dg_key.startsWith('YOUR_') || dg_key === 'YOUR_DEEPGRAM_API_KEY') {
       if (recognitionRef.current) {
         recognitionRef.current.start();
       }
@@ -161,36 +165,46 @@ export default function App() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaRecorderRef.current = new MediaRecorder(stream, { mimeType: 'audio/webm' });
       
-      const socket = new WebSocket('wss://api.deepgram.com/v1/listen?smart_format=true', [
-        'token',
-        dg_key,
-      ]);
+      if (!deepgramClientRef.current) {
+        deepgramClientRef.current = createClient(dg_key);
+      }
 
-      socket.onopen = () => {
+      const connection = deepgramClientRef.current.listen.live({
+        smart_format: true,
+        model: 'nova-2',
+      });
+
+      connection.on('open', () => {
         setStatus('Listening (Deepgram)...');
         setIsRecording(true);
         mediaRecorderRef.current.addEventListener('dataavailable', (event) => {
-          if (event.data.size > 0 && socket.readyState === 1) {
-            socket.send(event.data);
+          if (event.data.size > 0 && connection.getReadyState() === 1) {
+            connection.send(event.data);
           }
         });
         mediaRecorderRef.current.start(250);
-      };
+      });
 
-      socket.onmessage = (message) => {
-        const received = JSON.parse(message.data);
+      connection.on('transcriptReceived', (received) => {
         const transcript = received.channel.alternatives[0].transcript;
         if (transcript && received.is_final) {
           setCurrentTranscription(prev => prev + ' ' + transcript);
         }
-      };
+      });
 
-      socket.onclose = () => {
+      connection.on('close', () => {
         setIsRecording(false);
         setStatus('Ready');
-      };
+      });
 
-      deepgramSocketRef.current = socket;
+      connection.on('error', (error) => {
+        console.error('Deepgram connection error:', error);
+        setError('Deepgram transcription error.');
+        setIsSessionActive(false);
+        isSessionActiveRef.current = false;
+      });
+
+      deepgramSocketRef.current = connection;
     } catch (err) {
       console.error('Deepgram failed:', err);
       setError('Microphone access or Deepgram error.');
@@ -257,11 +271,11 @@ export default function App() {
   const getAIResponse = async (userText) => {
     setStatus('Exa Reasoning...');
     
-    // Environment variables with Vercel/Expo fallbacks
-    const exa_key = EXA_API_KEY || (Platform.OS === 'web' ? (process.env.EXA_API_KEY || process.env.EXPO_PUBLIC_EXA_API_KEY) : null);
+    // Environment variables with fallbacks
+    const exa_key = EXA_API_KEY || process.env.EXA_API_KEY || process.env.EXPO_PUBLIC_EXA_API_KEY;
 
     try {
-      if (!exa_key || exa_key === 'YOUR_EXA_API_KEY') {
+      if (!exa_key || exa_key.startsWith('YOUR_') || exa_key === 'YOUR_EXA_API_KEY') {
         return `[Test Mode] I heard you say: "${userText}". Please set your EXA_API_KEY in .env to enable my brain.`;
       }
 
@@ -398,7 +412,7 @@ export default function App() {
 
   // Helper for summarizing YouTube chunks (Exa Brain version)
   const summarizeYouTubeVideo = async (url) => {
-    const exa_key = EXA_API_KEY || (Platform.OS === 'web' ? (process.env.EXA_API_KEY || process.env.EXPO_PUBLIC_EXA_API_KEY) : null);
+    const exa_key = EXA_API_KEY || process.env.EXA_API_KEY || process.env.EXPO_PUBLIC_EXA_API_KEY;
     try {
       setStatus('Fetching Transcript...');
       const videoId = extractVideoId(url);
@@ -759,10 +773,10 @@ export default function App() {
       const task = { id: Date.now().toString(), type: 'Web', description: `Searched for ${query}` };
       newTasks.push(task);
       
-      const exa_key = EXA_API_KEY || (Platform.OS === 'web' ? (process.env.EXA_API_KEY || process.env.EXPO_PUBLIC_EXA_API_KEY) : null);
+      const exa_key = EXA_API_KEY || process.env.EXA_API_KEY || process.env.EXPO_PUBLIC_EXA_API_KEY;
       let searchSummary = "Found results. Summarizing...";
       
-      if (exa_key && exa_key !== 'YOUR_EXA_API_KEY') {
+      if (exa_key && !exa_key.startsWith('YOUR_') && exa_key !== 'YOUR_EXA_API_KEY') {
         try {
           const exa = new Exa(exa_key);
           const results = await exa.search(query, { numResults: 3 });

@@ -1,1 +1,12 @@
-{"version":2,"cleanUrls":true,"buildCommand":"cd arc-v1 && npm install && npm run build:web","outputDirectory":"arc-v1/dist","rewrites":[{"source":"/(.*)","destination":"/index.html"}]}
+{
+  "version": 2,
+  "cleanUrls": true,
+  "buildCommand": "cd arc-v1 && npx expo export --platform web",
+  "outputDirectory": "arc-v1/dist",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}

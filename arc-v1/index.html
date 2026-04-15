@@ -2,11 +2,35 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Expo Web Export</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ARC - Autonomous Reasoning Companion</title>
+    <meta name="description" content="ARC is an Autonomous Reasoning Companion powered by Exa AI.">
+    <style>
+        html, body, #root {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #000000;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+        }
+        /* Loading indicator */
+        .app-loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100%;
+            background-color: #0a0a0a;
+            color: #ffffff;
+        }
+    </style>
 </head>
 <body>
-    <h1>Welcome to Expo Web Export</h1>
-    <p>This is a basic HTML structure for Expo web export.</p>
+    <div id="root">
+        <div class="app-loading">Loading ARC...</div>
+    </div>
 </body>
 </html>

@@ -1,10 +1,11 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>ARC - Autonomous Reasoning Companion</title>
-    <meta name="description" content="ARC is an Autonomous Reasoning Companion powered by Exa AI.">
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#000000" />
+    <title>ARC</title>
+    <link rel="manifest" href="/manifest.json" />
     <style>
         html, body, #root {
             margin: 0;
@@ -16,21 +17,15 @@
         }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-        }
-        /* Loading indicator */
-        .app-loading {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100%;
-            background-color: #0a0a0a;
-            color: #ffffff;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
         }
     </style>
 </head>
 <body>
-    <div id="root">
-        <div class="app-loading">Loading ARC...</div>
-    </div>
+    <div id="root"></div>
+    <script>
+        window.__EXPO_ASSET_EXTENSIONS__ = ["ttf", "otf", "png", "jpg", "jpeg", "gif", "svg", "json"];
+    </script>
 </body>
 </html>

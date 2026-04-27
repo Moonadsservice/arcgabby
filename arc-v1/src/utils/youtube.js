@@ -1,4 +1,4 @@
-import { YouTubeTranscript } from 'youtube-transcript';
+import { YoutubeTranscript as YouTubeTranscript } from 'youtube-transcript';
 
 /**
  * Extracts video ID from a YouTube URL.

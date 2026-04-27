@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from '@env';
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 // Utility to validate URL
 const isValidUrl = (url) => {
@@ -68,6 +69,20 @@ export const searchMemory = async (query) => {
     return { success: true, data };
   } catch (error) {
     console.error('Error searching memory:', error);
+    return { success: false, error };
+  }
+};
+
+export const saveUserEmail = async (email) => {
+  if (!supabase) return { success: false, error: 'Supabase not configured' };
+  try {
+    const { data, error } = await supabase
+      .from('profiles')
+      .upsert({ email, updated_at: new Date() }, { onConflict: 'email' });
+    if (error) throw error;
+    return { success: true, data };
+  } catch (error) {
+    console.error('Error saving email:', error);
     return { success: false, error };
   }
 };

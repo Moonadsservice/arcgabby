@@ -12,8 +12,8 @@ export default defineConfig({
         name: 'ARC - Autonomous Reasoning Companion',
         short_name: 'ARC',
         description: 'Track flight, get alert, and take action instantly',
-        theme_color: '#000814',
-        background_color: '#000814',
+        theme_color: '#000000',
+        background_color: '#000000',
         display: 'standalone',
         icons: [
           {

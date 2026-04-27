@@ -1,7 +1,7 @@
 {
   "version": 2,
   "cleanUrls": true,
-  "buildCommand": "cd arc-v1 && npm install && rm -rf dist && npx expo export --platform web && cp index.html dist/",
+  "buildCommand": "cd arc-v1 && npm install && npm run build",
   "outputDirectory": "arc-v1/dist",
   "rewrites": [
     {

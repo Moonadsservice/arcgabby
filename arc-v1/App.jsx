@@ -522,9 +522,7 @@ export default function App() {
   };
 
   const createNewSession = () => {
-    if (messages.length > 0) {
-      setSessions(prev => [{ id: currentSessionId, name: currentSessionName, messages: [...messages], timestamp: Date.now() }, ...prev]);
-    }
+    // Session is already auto-saved by the useEffect, so we just clear the state
     setMessages([]);
     setCurrentSessionId(Date.now().toString());
     setCurrentSessionName(`Session ${new Date().toLocaleTimeString()}`);

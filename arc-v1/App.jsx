@@ -580,9 +580,10 @@ export default function App() {
         {/* Navigation */}
         <nav className="flex justify-between items-center px-8 py-6 z-10">
           <div className="flex items-center space-x-2">
-            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
-              <span className="text-white font-black text-xl">A</span>
-            </div>
+            <img src="/assets/images/icon.png" alt="ARC Logo" className="w-8 h-8 rounded-lg" onError={(e) => {
+              e.target.onerror = null;
+              e.target.src = 'https://ui-avatars.com/api/?name=A&background=2563eb&color=fff';
+            }} />
             <span className="text-2xl font-black tracking-tighter dark:text-white">ARC</span>
           </div>
           <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-navy-800 transition-all">
@@ -665,9 +666,15 @@ export default function App() {
     <div className="h-screen flex flex-col bg-white dark:bg-navy-900 transition-colors">
       {/* Header */}
       <header className="p-6 flex justify-between items-center border-b border-slate-100 dark:border-navy-800">
-        <div>
-          <h1 className="text-2xl font-black dark:text-white">ARC</h1>
-          <p className="text-[10px] font-bold text-slate-400 tracking-wider uppercase">Autonomous Reasoning Companion</p>
+        <div className="flex items-center space-x-3">
+          <img src="/assets/images/icon.png" alt="ARC Logo" className="w-10 h-10 rounded-xl" onError={(e) => {
+            e.target.onerror = null;
+            e.target.src = 'https://ui-avatars.com/api/?name=A&background=2563eb&color=fff';
+          }} />
+          <div>
+            <h1 className="text-2xl font-black dark:text-white leading-none">ARC</h1>
+            <p className="text-[10px] font-bold text-slate-400 tracking-wider uppercase mt-1">Autonomous Reasoning Companion</p>
+          </div>
         </div>
         <div className="flex items-center space-x-4">
           <button onClick={() => setShowHistory(true)} className="dark:text-white"><Folder /></button>

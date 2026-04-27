@@ -581,7 +581,7 @@ export default function App() {
         <nav className="flex justify-between items-center px-8 py-6 z-10">
           <div className="flex items-center space-x-2">
             <div className="w-10 h-10 bg-black rounded-lg flex items-center justify-center overflow-hidden border border-white/10">
-              <img src="/assets/images/icon.png" alt="ARC Logo" className="w-full h-full object-contain" onError={(e) => {
+              <img src="/assets/images/logo.svg" alt="ARC Logo" className="w-full h-full object-contain" onError={(e) => {
                 e.target.onerror = null;
                 e.target.src = 'https://ui-avatars.com/api/?name=A&background=000&color=fff';
               }} />
@@ -670,7 +670,7 @@ export default function App() {
       <header className="p-6 flex justify-between items-center border-b border-slate-100 dark:border-navy-800">
         <div className="flex items-center space-x-3">
           <div className="w-12 h-12 bg-black rounded-xl flex items-center justify-center overflow-hidden border border-white/10">
-            <img src="/assets/images/icon.png" alt="ARC Logo" className="w-full h-full object-contain" onError={(e) => {
+            <img src="/assets/images/logo.svg" alt="ARC Logo" className="w-full h-full object-contain" onError={(e) => {
               e.target.onerror = null;
               e.target.src = 'https://ui-avatars.com/api/?name=A&background=000&color=fff';
             }} />

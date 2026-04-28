@@ -40,6 +40,7 @@ import { saveMemory, searchMemory, saveUserEmail, supabase } from './src/utils/s
 import { useDeepgramAudio } from './src/hooks/useDeepgramAudio';
 import { getOpenRouterResponse } from './src/utils/ai';
 import { sendEmail } from './src/utils/email';
+import { fetchWeather } from './src/utils/weather';
 
 // Environment variables for Vite
 const DEEPGRAM_API_KEY = import.meta.env.VITE_DEEPGRAM_API_KEY;
@@ -74,6 +75,7 @@ export default function App() {
   const [authName, setAuthName] = useState('');
   const [historyFilter, setHistoryFilter] = useState('All');
   const [activeTool, setActiveTool] = useState(null);
+  const [weatherData, setWeatherData] = useState(null);
   const [sessions, setSessions] = useState(() => {
     const saved = localStorage.getItem('sessions');
     return saved ? JSON.parse(saved) : [];
@@ -492,9 +494,25 @@ export default function App() {
     }
 
     if (text.includes('weather')) {
-      const locationMatch = text.match(/(?:in|at|for)\s+([a-zA-Z\s]+)(?:\s|$)/);
-      const location = locationMatch ? locationMatch[1].trim() : 'your location';
-      setActiveTool('Weather');
+      const locationMatch = text.match(/(?:in|at|for)\s+([a-zA-Z\s,]+)(?:\s|$)/);
+      const location = locationMatch ? locationMatch[1].trim() : 'London'; // Default to London if not specified
+      
+      setStatus(`Checking weather for ${location}...`);
+      fetchWeather(location).then(res => {
+        if (res.success) {
+          setWeatherData(res.data);
+          setActiveTool('Weather');
+        } else {
+          console.error('Weather error:', res.error);
+          setMessages(prev => [...prev, { 
+            id: `err-${Date.now()}`, 
+            role: 'assistant', 
+            content: `I couldn't find weather info for "${location}". Please check the location name.`,
+            timestamp: Date.now() 
+          }]);
+        }
+        setStatus('Ready');
+      });
       return ` [Checking weather for ${location}...]`;
     }
 
@@ -1280,27 +1298,42 @@ export default function App() {
               </div>
               <button onClick={() => setActiveTool(null)} className="p-2 hover:bg-slate-100 dark:hover:bg-navy-900 rounded-full transition-colors"><X size={24} className="text-slate-400" /></button>
             </div>
-            <div className="flex flex-col items-center py-8 space-y-4">
-              <Sun size={64} className="text-yellow-400 animate-pulse" />
-              <div className="text-center">
-                <p className="text-5xl font-black dark:text-white">72°F</p>
-                <p className="font-bold text-slate-500 uppercase tracking-widest mt-2">Sunny • San Francisco</p>
+            
+            {weatherData ? (
+              <>
+                <div className="flex flex-col items-center py-8 space-y-4">
+                  {weatherData.icon ? (
+                    <img src={`https://openweathermap.org/img/wn/${weatherData.icon}@4x.png`} alt={weatherData.condition} className="w-32 h-32 animate-pulse" />
+                  ) : (
+                    <Sun size={64} className="text-yellow-400 animate-pulse" />
+                  )}
+                  <div className="text-center">
+                    <p className="text-5xl font-black dark:text-white">{weatherData.temp}°F</p>
+                    <p className="font-bold text-slate-500 uppercase tracking-widest mt-2">{weatherData.condition} • {weatherData.location}</p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="p-3 bg-slate-50 dark:bg-navy-900/50 rounded-2xl text-center">
+                    <p className="text-[10px] font-black text-slate-400 uppercase">Wind</p>
+                    <p className="font-bold dark:text-white">{weatherData.wind}mph</p>
+                  </div>
+                  <div className="p-3 bg-slate-50 dark:bg-navy-900/50 rounded-2xl text-center">
+                    <p className="text-[10px] font-black text-slate-400 uppercase">Humid</p>
+                    <p className="font-bold dark:text-white">{weatherData.humidity}%</p>
+                  </div>
+                  <div className="p-3 bg-slate-50 dark:bg-navy-900/50 rounded-2xl text-center">
+                    <p className="text-[10px] font-black text-slate-400 uppercase">Condition</p>
+                    <p className="font-bold dark:text-white text-[10px] truncate">{weatherData.description}</p>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="py-20 text-center">
+                <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+                <p className="text-slate-400 font-bold uppercase tracking-widest">Loading Forecast...</p>
               </div>
-            </div>
-            <div className="grid grid-cols-3 gap-3">
-              <div className="p-3 bg-slate-50 dark:bg-navy-900/50 rounded-2xl text-center">
-                <p className="text-[10px] font-black text-slate-400 uppercase">Wind</p>
-                <p className="font-bold dark:text-white">12mph</p>
-              </div>
-              <div className="p-3 bg-slate-50 dark:bg-navy-900/50 rounded-2xl text-center">
-                <p className="text-[10px] font-black text-slate-400 uppercase">Humid</p>
-                <p className="font-bold dark:text-white">45%</p>
-              </div>
-              <div className="p-3 bg-slate-50 dark:bg-navy-900/50 rounded-2xl text-center">
-                <p className="text-[10px] font-black text-slate-400 uppercase">UV</p>
-                <p className="font-bold dark:text-white">High</p>
-              </div>
-            </div>
+            )}
+            
             <button onClick={() => setActiveTool(null)} className="w-full py-4 bg-blue-600 text-white rounded-2xl font-bold shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition-all">Close</button>
           </div>
         </div>

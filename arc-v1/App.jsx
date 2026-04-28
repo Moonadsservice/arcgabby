@@ -274,103 +274,19 @@ export default function App() {
 
   const isSessionActiveRef = useRef(false);
   const scrollViewRef = useRef(null);
-  const recognitionRef = useRef(null);
 
-  useEffect(() => {
-    if (window.webkitSpeechRecognition || window.SpeechRecognition) {
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      recognitionRef.current = new SpeechRecognition();
-      recognitionRef.current.continuous = true;
-      recognitionRef.current.interimResults = true;
-      recognitionRef.current.lang = 'en-US';
-
-      recognitionRef.current.onstart = () => {
-        setStatus('Listening...');
-        setIsRecording(true);
-      };
-
-      recognitionRef.current.onresult = (event) => {
-        const transcript = Array.from(event.results)
-          .map(result => result[0])
-          .map(result => result.transcript)
-          .join('');
-        setCurrentTranscription(transcript);
-      };
-
-      recognitionRef.current.onerror = (event) => {
-        console.error('Speech recognition error:', event.error);
-        setError(event.error === 'not-allowed' ? 'Microphone access denied.' : `Transcription error: ${event.error}`);
-        setIsSessionActive(false);
-        isSessionActiveRef.current = false;
-        setStatus('Ready');
-      };
-
-      recognitionRef.current.onend = () => {
-        if (isSessionActiveRef.current) {
-          try { recognitionRef.current.start(); } catch (e) {}
-        } else {
-          setIsRecording(false);
-          setStatus('Ready');
-        }
-      };
-    }
-  }, []);
-
-  const startTranscription = () => {
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.start();
-      } catch (e) {
-        console.error('Recognition start failed:', e);
-      }
+  const toggleSession = () => {
+    const nextActive = !isSessionActive;
+    setIsSessionActive(nextActive);
+    isSessionActiveRef.current = nextActive;
+    if (nextActive) {
+      startListening();
     } else {
-      setError('Speech recognition not supported in this browser.');
-    }
-  };
-
-  const stopTranscription = () => {
-    if (recognitionRef.current) {
-      recognitionRef.current.stop();
-    }
-  };
-
-  const speakText = async (text) => {
-    if (!isVoiceEnabled) return;
-    if (DEEPGRAM_API_KEY && !DEEPGRAM_API_KEY.startsWith('YOUR_')) {
-      try {
-        const model = personality === 'Jenny' ? 'aura-stella-en' : 'aura-orion-en';
-        const response = await fetch(`https://api.deepgram.com/v1/speak?model=${model}`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Token ${DEEPGRAM_API_KEY}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ text })
-        });
-
-        if (response.ok) {
-          const blob = await response.blob();
-          const url = URL.createObjectURL(blob);
-          const audio = new Audio(url);
-          audio.onplay = () => setStatus('Speaking...');
-          audio.onended = () => setStatus('Ready');
-          audio.play();
-          return;
-        }
-      } catch (err) { console.error('Deepgram TTS error:', err); }
-    }
-
-    if (window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.onstart = () => setStatus('Speaking...');
-      utterance.onend = () => setStatus('Ready');
-      const voices = window.speechSynthesis.getVoices();
-      let selectedVoice = personality === 'Jenny' 
-        ? voices.find(v => v.name.toLowerCase().includes('female') || v.name.includes('Zira') || v.name.includes('Samantha'))
-        : voices.find(v => v.name.toLowerCase().includes('male') || v.name.includes('David') || v.name.includes('Daniel'));
-      if (selectedVoice) utterance.voice = selectedVoice;
-      window.speechSynthesis.speak(utterance);
+      stopListening();
+      if (currentTranscription.trim()) {
+        handleSendMessage(currentTranscription);
+        setCurrentTranscription('');
+      }
     }
   };
 
@@ -406,27 +322,42 @@ export default function App() {
 
   const handleFlightArrival = (num) => {
     setStatus('Checking Arrival Status...');
-    setTimeout(() => {
+    setTimeout(async () => {
       const isMine = flightMonitoring.isMine;
-      if (isMine) {
-        const arrivalMsg = "Welcome to your destination! You've successfully arrived.";
-        const arrivalId = Date.now().toString() + '-arrival';
-        setMessages(prev => [...prev, { id: arrivalId, role: 'assistant', content: arrivalMsg, timestamp: Date.now() }]);
-        speak(arrivalMsg, personality);
-        
-        if (wantsArrivalRide) {
-          setTimeout(() => {
-            setShowBookRide(true);
-            setSelectedRideProvider(null);
-          }, 2000);
+      const arrivalMsg = isMine 
+        ? "Welcome to your destination! You've successfully arrived."
+        : `Flight ${num} has arrived at its destination. I've updated your record.`;
+      
+      const newMsg = { id: Date.now().toString() + '-arrival', role: 'assistant', content: arrivalMsg, timestamp: Date.now() };
+      
+      setMessages(prev => {
+        const next = [...prev, newMsg];
+        // Agentic Offline Update: Sync to Supabase even if user isn't looking
+        if (user) {
+          supabase.from('files').upsert({
+            id: currentSessionId,
+            user_id: user.id,
+            type: 'session',
+            content: next,
+            metadata: { name: currentSessionName, timestamp: Date.now() }
+          }).then();
         }
-      } else {
-        const arrivalMsg = `Flight ${num} has arrived at its destination. I've updated your record.`;
-        setMessages(prev => [...prev, { id: Date.now().toString(), role: 'assistant', content: arrivalMsg, timestamp: Date.now() }]);
-        speak(arrivalMsg, personality);
+        return next;
+      });
+
+      speak(arrivalMsg, personality);
+      
+      if (isMine && wantsArrivalRide) {
+        setTimeout(() => {
+          setShowBookRide(true);
+          setSelectedRideProvider(null);
+        }, 2000);
       }
 
-      sendNotification('Arrival', `Flight ${num} has arrived safely.`, { type: 'flight_status' });
+      sendNotification('Arrival', `Flight ${num} has arrived safely.`, { 
+        type: 'flight_status',
+        sessionId: currentSessionId 
+      });
       
       // Agentic Email Notification Logic
       if (notificationToggles.meEmail && user?.email) {
@@ -501,14 +432,28 @@ export default function App() {
     // Agentic tool triggers
     if (text.includes('book a ride') || text.includes('uber') || text.includes('bolt')) {
       const provider = text.includes('bolt') ? 'bolt' : 'uber';
-      const destinationMatch = text.match(/(?:to|at|in)\s+([a-zA-Z\s]+)(?:\s|$)/);
+      const destinationMatch = text.match(/(?:to|at|in)\s+([a-zA-Z\s,]+)(?:\s|$)/);
       if (destinationMatch && destinationMatch[1]) {
         const dest = destinationMatch[1].trim();
         setRideDestination(dest);
         setSelectedRideProvider(provider);
-        setShowBookRide(true);
-        await geocodeDestination(dest);
-        return ` [Setting up ${provider} to ${dest}]`;
+        const coords = await geocodeDestination(dest);
+        if (coords) {
+          // Document it in the session history instead of notifying
+          const docMsg = { 
+            id: `doc-${Date.now()}`, 
+            role: 'assistant', 
+            content: `Documented: Initiated ${provider} booking to ${dest}.`,
+            timestamp: Date.now() 
+          };
+          setMessages(prev => [...prev, docMsg]);
+          
+          setShowBookRide(true);
+          if (text.includes('now') || text.includes('instantly')) {
+            openRideApp(provider, coords);
+          }
+          return ` [Setting up ${provider} to ${dest}]`;
+        }
       }
       setShowBookRide(true);
       return " [Opening Ride Booking]";
@@ -519,7 +464,8 @@ export default function App() {
       if (flightMatch) {
         const num = flightMatch[0].toUpperCase();
         setFlightNumber(num);
-        const isMine = !text.includes('friend') && !text.includes('mom') && !text.includes('dad') && !text.includes('someone');
+        // "Wise" flight ownership detection
+        const isMine = !text.includes('friend') && !text.includes('mom') && !text.includes('dad') && !text.includes('someone') && !text.includes('his') && !text.includes('her') && !text.includes('their');
         trackFlight(num, isMine);
         return ` [Tracking flight ${num}${isMine ? ' (Yours)' : ' (Others)'}]`;
       }
@@ -536,13 +482,13 @@ export default function App() {
   };
 
   const handleFeedbackSubmit = async () => {
-    if (!feedbackText.trim()) return;
+    if (!feedbackText.trim() || !user) return;
     setStatus('Sending...');
     try {
       const { error } = await supabase.from('feedback').insert([{
-        user_id: user?.id,
-        username: user?.email?.split('@')[0],
-        email: user?.email,
+        user_id: user.id,
+        username: user.email.split('@')[0],
+        email: user.email,
         content: feedbackText
       }]);
       if (error) throw error;
@@ -658,7 +604,7 @@ export default function App() {
     }
 
     if (isDualMode) {
-      // In dual mode, both respond
+      setIsVoiceEnabled(true); // Voice must be on in Dual mode
       const respJenny = await getAIResponse(text, 'Jenny');
       setMessages(prev => [...prev, { id: `jenny-${Date.now()}`, role: 'assistant', content: respJenny, personality: 'Jenny', timestamp: Date.now() }]);
       await speak(respJenny, 'Jenny');
@@ -707,14 +653,58 @@ export default function App() {
     setNotifications(prev => [newNotification, ...prev]);
   };
 
+  // Sync sessions with Supabase
+  useEffect(() => {
+    const syncSession = async () => {
+      if (user && messages.length > 0) {
+        const { error } = await supabase
+          .from('files')
+          .upsert({
+            id: currentSessionId,
+            user_id: user.id,
+            type: 'session',
+            content: messages,
+            metadata: { name: currentSessionName, timestamp: Date.now() }
+          });
+        
+        if (error) console.error('Error syncing session to Supabase:', error);
+      } else {
+        localStorage.setItem('sessions', JSON.stringify(sessions));
+      }
+    };
+
+    const timeoutId = setTimeout(syncSession, 2000); // Debounce sync
+    return () => clearTimeout(timeoutId);
+  }, [messages, currentSessionId, currentSessionName, user]);
+
+  // Auto-scroll to bottom
+  useEffect(() => {
+    if (scrollViewRef.current) {
+      scrollViewRef.current.scrollTo({
+        top: scrollViewRef.current.scrollHeight,
+        behavior: 'smooth'
+      });
+    }
+  }, [messages, currentTranscription]);
+
   const handleNotificationClick = (n) => {
     setShowNotifications(false);
-    if (n.payload?.type?.includes('youtube')) { setHistoryFilter('Files'); setShowHistory(true); }
-    else if (n.payload?.type === 'flight_status') setShowFlightTracker(true);
+    if (n.payload?.sessionId) {
+      const session = sessions.find(s => s.id === n.payload.sessionId);
+      if (session) {
+        setMessages(session.messages);
+        setCurrentSessionId(session.id);
+        setCurrentSessionName(session.name);
+      }
+    } else if (n.payload?.type?.includes('youtube')) { 
+      setHistoryFilter('Files'); 
+      setShowHistory(true); 
+    } else if (n.payload?.type === 'flight_status') {
+      setShowFlightTracker(true);
+    }
   };
 
   const createNewSession = () => {
-    // Session is already auto-saved by the useEffect, so we just clear the state
     setMessages([]);
     setCurrentSessionId(Date.now().toString());
     setCurrentSessionName(`Session ${new Date().toLocaleTimeString()}`);
@@ -980,8 +970,8 @@ export default function App() {
         <div className="absolute right-6 top-1/2 -translate-y-1/2 z-20 flex flex-col items-center space-y-4">
           {showQuickTools && (
             <div className="bg-slate-900/90 p-2 rounded-3xl flex flex-col space-y-2 animate-in fade-in zoom-in">
-              <button onClick={() => setShowBookRide(true)} className="p-3 bg-white/10 rounded-full text-blue-500" title="Book Ride"><Car size={20} /></button>
-              <button onClick={() => setShowFlightTracker(true)} className="p-3 bg-white/10 rounded-full text-emerald-500" title="Flight Tracker"><Plane size={20} /></button>
+              <button onClick={() => { setShowBookRide(true); setShowQuickTools(false); }} className="p-3 bg-white/10 rounded-full text-blue-500" title="Book Ride"><Car size={20} /></button>
+              <button onClick={() => { setShowFlightTracker(true); setShowQuickTools(false); }} className="p-3 bg-white/10 rounded-full text-emerald-500" title="Flight Tracker"><Plane size={20} /></button>
               <button onClick={() => { setActiveTool('Weather'); setShowQuickTools(false); }} className="p-3 bg-white/10 rounded-full text-yellow-500" title="Weather"><CloudSun size={20} /></button>
             </div>
           )}
@@ -999,7 +989,9 @@ export default function App() {
           
           {messages.map((msg) => (
             <div key={msg.id || `msg-${msg.timestamp || Date.now()}-${Math.random()}`} className={`max-w-[85%] p-4 rounded-3xl ${msg.role === 'user' ? 'ml-auto bg-blue-600 text-white rounded-br-none' : 'mr-auto bg-slate-100 dark:bg-navy-800 dark:text-white rounded-bl-none'}`}>
-              <span className="text-[10px] font-black uppercase opacity-60 mb-1 block">{msg.role === 'user' ? 'You' : personality}</span>
+              <span className="text-[10px] font-black uppercase opacity-60 mb-1 block">
+                {msg.role === 'user' ? 'You' : (isDualMode ? (msg.personality || 'Agent') : personality)}
+              </span>
               <p className="text-sm leading-relaxed">{msg.content}</p>
               
               {msg.type === 'flight_contacts_choice' && (

@@ -156,7 +156,8 @@ export default function App() {
 
   useEffect(() => {
     setStatus(audioStatus);
-  }, [audioStatus]);
+    setIsRecording(isListening);
+  }, [audioStatus, isListening]);
 
   // Supabase Auth Listener
   useEffect(() => {
@@ -180,14 +181,29 @@ export default function App() {
   }, []);
 
   const loadUserSessions = async (userId) => {
-    const { data, error } = await supabase
-      .from('files')
-      .select('*')
-      .eq('user_id', userId)
-      .eq('type', 'session')
-      .order('created_at', { ascending: false });
-    
-    if (data) setSessions(data.map(d => ({ ...d.metadata, id: d.id, messages: d.content })));
+    try {
+      const { data, error } = await supabase
+        .from('files')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('type', 'session')
+        .order('created_at', { ascending: false });
+      
+      if (error) throw error;
+      if (data) {
+        const loadedSessions = data.map(d => ({ 
+          ...d.metadata, 
+          id: d.id, 
+          messages: d.content,
+          timestamp: d.metadata?.timestamp || new Date(d.created_at).getTime()
+        }));
+        setSessions(loadedSessions);
+        // Also update local storage as a cache
+        localStorage.setItem('sessions', JSON.stringify(loadedSessions));
+      }
+    } catch (err) {
+      console.error('Error loading sessions from Supabase:', err);
+    }
   };
 
   // OneSignal Initialization
@@ -280,8 +296,10 @@ export default function App() {
     setIsSessionActive(nextActive);
     isSessionActiveRef.current = nextActive;
     if (nextActive) {
+      console.log('Starting Deepgram listening...');
       startListening();
     } else {
+      console.log('Stopping Deepgram listening...');
       stopListening();
       if (currentTranscription.trim()) {
         handleSendMessage(currentTranscription);
@@ -474,8 +492,10 @@ export default function App() {
     }
 
     if (text.includes('weather')) {
+      const locationMatch = text.match(/(?:in|at|for)\s+([a-zA-Z\s]+)(?:\s|$)/);
+      const location = locationMatch ? locationMatch[1].trim() : 'your location';
       setActiveTool('Weather');
-      return " [Checking Weather...]";
+      return ` [Checking weather for ${location}...]`;
     }
 
     return "";
@@ -630,9 +650,9 @@ export default function App() {
     setIsSessionActive(nextActive);
     isSessionActiveRef.current = nextActive;
     if (nextActive) {
-      startTranscription();
+      startListening();
     } else {
-      stopTranscription();
+      stopListening();
       if (currentTranscription.trim()) {
         handleSendMessage(currentTranscription);
         setCurrentTranscription('');
@@ -657,23 +677,33 @@ export default function App() {
   useEffect(() => {
     const syncSession = async () => {
       if (user && messages.length > 0) {
-        const { error } = await supabase
-          .from('files')
-          .upsert({
-            id: currentSessionId,
-            user_id: user.id,
-            type: 'session',
-            content: messages,
-            metadata: { name: currentSessionName, timestamp: Date.now() }
-          });
-        
-        if (error) console.error('Error syncing session to Supabase:', error);
+        try {
+          const { error } = await supabase
+            .from('files')
+            .upsert({
+              id: currentSessionId,
+              user_id: user.id,
+              type: 'session',
+              content: messages,
+              metadata: { 
+                name: currentSessionName, 
+                timestamp: Date.now(),
+                user_email: user.email 
+              }
+            }, { onConflict: 'id' });
+          
+          if (error) throw error;
+          console.log('Session synced to Supabase successfully.');
+        } catch (err) {
+          console.error('Error syncing session to Supabase:', err);
+        }
       } else {
         localStorage.setItem('sessions', JSON.stringify(sessions));
+        localStorage.setItem('currentMessages', JSON.stringify(messages));
       }
     };
 
-    const timeoutId = setTimeout(syncSession, 2000); // Debounce sync
+    const timeoutId = setTimeout(syncSession, 1000); // Faster sync
     return () => clearTimeout(timeoutId);
   }, [messages, currentSessionId, currentSessionName, user]);
 
@@ -758,14 +788,20 @@ export default function App() {
       return;
     }
     setStatus('Signing In...');
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email: authEmail,
-      password: authPassword,
-    });
-    if (error) {
-      alert(error.message);
-    } else {
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: authEmail,
+        password: authPassword,
+      });
+      if (error) throw error;
+      
+      // Clear local cache on successful login to force Supabase sync
+      localStorage.removeItem('sessions');
+      localStorage.removeItem('currentMessages');
+      setMessages([]);
       setCurrentView('chat');
+    } catch (err) {
+      alert(err.message);
     }
     setStatus('Ready');
   };
@@ -776,20 +812,21 @@ export default function App() {
       return;
     }
     setStatus('Creating Account...');
-    const { data, error } = await supabase.auth.signUp({
-      email: authEmail,
-      password: authPassword,
-      options: {
-        data: {
-          full_name: authName,
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email: authEmail,
+        password: authPassword,
+        options: {
+          data: {
+            full_name: authName,
+          },
         },
-      },
-    });
-    if (error) {
-      alert(error.message);
-    } else {
+      });
+      if (error) throw error;
       alert('Check your email for the confirmation link!');
       setAuthView('login');
+    } catch (err) {
+      alert(err.message);
     }
     setStatus('Ready');
   };

@@ -12,7 +12,7 @@ const isValidUrl = (url) => {
 };
 
 // Initialize Supabase client only if a valid URL is provided
-const supabase = isValidUrl(SUPABASE_URL) ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
+export const supabase = isValidUrl(SUPABASE_URL) ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 
 /**
  * Saves AI outputs into Supabase 'files' table.

@@ -39,6 +39,7 @@ import {
 import { saveMemory, searchMemory, saveUserEmail, supabase } from './src/utils/supabase';
 import { useDeepgramAudio } from './src/hooks/useDeepgramAudio';
 import { getOpenRouterResponse } from './src/utils/ai';
+import { sendEmail } from './src/utils/email';
 
 // Environment variables for Vite
 const DEEPGRAM_API_KEY = import.meta.env.VITE_DEEPGRAM_API_KEY;
@@ -426,6 +427,25 @@ export default function App() {
       }
 
       sendNotification('Arrival', `Flight ${num} has arrived safely.`, { type: 'flight_status' });
+      
+      // Agentic Email Notification Logic
+      if (notificationToggles.meEmail && user?.email) {
+        sendEmail({
+          to: user.email,
+          subject: `ARC Arrival Alert: Flight ${num}`,
+          html: `<strong>Welcome home!</strong><p>Your flight ${num} has arrived safely at its destination.</p>`
+        });
+      }
+
+      if (notificationToggles.emergencyEmail && emergencyContacts.length > 0) {
+        const recipients = emergencyContacts.map(c => c.email);
+        sendEmail({
+          to: recipients,
+          subject: `ARC Flight Alert: ${user?.email?.split('@')[0]} has arrived`,
+          html: `<p>This is an automated update from ARC. The flight ${num} being monitored for ${user?.email} has arrived safely.</p>`
+        });
+      }
+
       setStatus('Ready');
     }, 2000);
   };
@@ -741,6 +761,48 @@ export default function App() {
 
   // Render Landing Page
   const [authView, setAuthView] = useState('login'); // 'login', 'signup', 'forgot_password'
+
+  const handleLogin = async () => {
+    if (!authEmail || !authPassword) {
+      alert('Please fill in all fields.');
+      return;
+    }
+    setStatus('Signing In...');
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: authEmail,
+      password: authPassword,
+    });
+    if (error) {
+      alert(error.message);
+    } else {
+      setCurrentView('chat');
+    }
+    setStatus('Ready');
+  };
+
+  const handleSignup = async () => {
+    if (!authEmail || !authPassword || !authName) {
+      alert('Please fill in all fields.');
+      return;
+    }
+    setStatus('Creating Account...');
+    const { data, error } = await supabase.auth.signUp({
+      email: authEmail,
+      password: authPassword,
+      options: {
+        data: {
+          full_name: authName,
+        },
+      },
+    });
+    if (error) {
+      alert(error.message);
+    } else {
+      alert('Check your email for the confirmation link!');
+      setAuthView('login');
+    }
+    setStatus('Ready');
+  };
 
   const handleForgotPassword = async () => {
     if (!authEmail) {

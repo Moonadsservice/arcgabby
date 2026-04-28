@@ -36,12 +36,13 @@ import {
   Trash2,
   Save
 } from 'lucide-react';
-import Exa from 'exa-js';
-import { saveMemory, searchMemory, saveUserEmail } from './src/utils/supabase';
+import { saveMemory, searchMemory, saveUserEmail, supabase } from './src/utils/supabase';
+import { useDeepgramAudio } from './src/hooks/useDeepgramAudio';
+import { getOpenRouterResponse } from './src/utils/ai';
 
 // Environment variables for Vite
-const EXA_API_KEY = import.meta.env.VITE_EXA_API_KEY;
 const DEEPGRAM_API_KEY = import.meta.env.VITE_DEEPGRAM_API_KEY;
+const ONESIGNAL_APP_ID = import.meta.env.VITE_ONESIGNAL_APP_ID;
 
 export default function App() {
   const [isDarkMode, setIsDarkMode] = useState(() => {
@@ -135,6 +136,98 @@ export default function App() {
       }, 5000);
     });
   }, []);
+
+  const [isEmergencyCollapsed, setIsEmergencyCollapsed] = useState(true);
+  const [user, setUser] = useState(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  // Initialize Audio Hook
+  const { isListening, status: audioStatus, startListening, stopListening, speak } = useDeepgramAudio(
+    async (text, type) => {
+      if (type === 'silence') {
+        await handleSendMessage(text);
+      } else {
+        setCurrentTranscription(text);
+      }
+    },
+    { apiKey: DEEPGRAM_API_KEY }
+  );
+
+  useEffect(() => {
+    setStatus(audioStatus);
+  }, [audioStatus]);
+
+  // Supabase Auth Listener
+  useEffect(() => {
+    supabase?.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+      if (session?.user) {
+        setUserEmail(session.user.email);
+        loadUserSessions(session.user.id);
+      }
+    });
+
+    const { data: { subscription } } = supabase?.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      if (session?.user) {
+        setUserEmail(session.user.email);
+        loadUserSessions(session.user.id);
+      }
+    });
+
+    return () => subscription?.unsubscribe();
+  }, []);
+
+  const loadUserSessions = async (userId) => {
+    const { data, error } = await supabase
+      .from('files')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('type', 'session')
+      .order('created_at', { ascending: false });
+    
+    if (data) setSessions(data.map(d => ({ ...d.metadata, id: d.id, messages: d.content })));
+  };
+
+  // OneSignal Initialization
+  useEffect(() => {
+    if (ONESIGNAL_APP_ID && !ONESIGNAL_APP_ID.startsWith('YOUR_')) {
+      const initOneSignal = async () => {
+        try {
+          const OneSignal = window.OneSignal || [];
+          await OneSignal.push(() => {
+            OneSignal.init({
+              appId: ONESIGNAL_APP_ID,
+              allowLocalhostAsSecureOrigin: true,
+              welcomeNotification: {
+                title: "ARC Autonomous Reasoning Companion",
+                message: "Notifications enabled!"
+              }
+            });
+            
+            OneSignal.getUserId().then(id => {
+              if (id) console.log("OneSignal Player ID:", id);
+            });
+          });
+        } catch (err) {
+          console.error("OneSignal Init Error:", err);
+        }
+      };
+      
+      const script = document.createElement('script');
+      script.src = "https://cdn.onesignal.com/sdks/OneSignalSDK.js";
+      script.async = true;
+      document.head.appendChild(script);
+      script.onload = initOneSignal;
+    }
+  }, []);
+
+  // Auto-scroll to bottom
+  useEffect(() => {
+    if (scrollViewRef.current) {
+      scrollViewRef.current.scrollTop = scrollViewRef.current.scrollHeight;
+    }
+  }, [messages, currentTranscription]);
 
   useEffect(() => {
     localStorage.setItem('darkMode', JSON.stringify(isDarkMode));
@@ -310,52 +403,31 @@ export default function App() {
     setShowBookRide(false);
   };
 
-  const trackFlight = async (num) => {
-    setStatus('Tracking Flight...');
-    setTimeout(() => {
-      const mockStatus = {
-        active: true,
-        number: num,
-        status: 'On Time',
-        departure: '10:30 AM',
-        arrival: '2:45 PM',
-        lastUpdate: new Date().toLocaleTimeString()
-      };
-      setFlightMonitoring(mockStatus);
-      const aiResponse = `I've started monitoring flight ${num}. It's currently ${mockStatus.status}. Should I notify any of your emergency contacts?`;
-      const assistantMsg = {
-        id: `msg-flight-choice-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-        role: 'assistant',
-        content: aiResponse,
-        type: 'flight_contacts_choice',
-        timestamp: Date.now()
-      };
-      setMessages(prev => [...prev, assistantMsg]);
-      speakText(aiResponse);
-      setStatus('Ready');
-      setActiveFlightStep('contacts_choice');
-      sendNotification('Flight Tracking Active', `Monitoring flight ${num}.`, { type: 'flight_status' });
-      setTimeout(() => handleFlightArrival(num), 30000);
-    }, 1500);
-  };
-
   const handleFlightArrival = (num) => {
-    const arrivalMsg = "Welcome to your destination! You've successfully arrived.";
-    const arrivalId = Date.now().toString() + '-arrival';
-    setMessages(prev => [...prev, { id: arrivalId, role: 'assistant', content: arrivalMsg }]);
-    speakText(arrivalMsg);
-    
-    if (wantsArrivalRide) {
-      setTimeout(() => {
-        setShowBookRide(true);
-        setSelectedRideProvider(null);
-      }, 1500);
-    }
+    setStatus('Checking Arrival Status...');
+    setTimeout(() => {
+      const isMine = flightMonitoring.isMine;
+      if (isMine) {
+        const arrivalMsg = "Welcome to your destination! You've successfully arrived.";
+        const arrivalId = Date.now().toString() + '-arrival';
+        setMessages(prev => [...prev, { id: arrivalId, role: 'assistant', content: arrivalMsg, timestamp: Date.now() }]);
+        speak(arrivalMsg, personality);
+        
+        if (wantsArrivalRide) {
+          setTimeout(() => {
+            setShowBookRide(true);
+            setSelectedRideProvider(null);
+          }, 2000);
+        }
+      } else {
+        const arrivalMsg = `Flight ${num} has arrived at its destination. I've updated your record.`;
+        setMessages(prev => [...prev, { id: Date.now().toString(), role: 'assistant', content: arrivalMsg, timestamp: Date.now() }]);
+        speak(arrivalMsg, personality);
+      }
 
-    sendNotification('Arrival', `You have arrived safely.`, { type: 'flight_status' });
-    if (selectedContactsForFlight.length > 0) {
-      sendNotification('Contacts Notified', `Arrival update sent to ${selectedContactsForFlight.length} contacts.`);
-    }
+      sendNotification('Arrival', `Flight ${num} has arrived safely.`, { type: 'flight_status' });
+      setStatus('Ready');
+    }, 2000);
   };
 
   const handleFlightContactChoice = (choice) => {
@@ -367,21 +439,21 @@ export default function App() {
       askAboutArrivalRide(`Great. I'll notify everyone in your emergency contacts list.`);
     } else if (choice === 'not_all') {
       setActiveFlightStep('contact_name');
-      setMessages(prev => [...prev, { role: 'assistant', content: "Who should I notify? Please provide the name of the emergency contact first." }]);
+      setMessages(prev => [...prev, { id: Date.now().toString(), role: 'assistant', content: "Who should I notify? Please provide the name of the emergency contact first.", timestamp: Date.now() }]);
     }
   };
 
   const askAboutArrivalRide = (prefix = "") => {
     const question = `${prefix} Would you like to book a ride on arrival?`;
     const assistantMsg = {
-      id: `msg-ride-ask-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      id: `msg-ride-ask-${Date.now()}`,
       role: 'assistant', 
       content: question, 
       type: 'flight_ride_ask',
       timestamp: Date.now()
     };
     setMessages(prev => [...prev, assistantMsg]);
-    speakText(question);
+    speak(question, personality);
     setActiveFlightStep('book_ride_ask');
   };
 
@@ -391,62 +463,151 @@ export default function App() {
       setWantsArrivalRide(true);
       const msg = "Perfect. I will notify you and present ride options upon arrival.";
       setMessages(prev => [...prev, { id: choiceId, role: 'assistant', content: msg, timestamp: Date.now() }]);
-      speakText(msg);
+      speak(msg, personality);
     } else {
       setWantsArrivalRide(false);
       const msg = "Understood. Have a good flight and safe travels!";
       setMessages(prev => [...prev, { id: choiceId, role: 'assistant', content: msg, timestamp: Date.now() }]);
-      speakText(msg);
+      speak(msg, personality);
     }
     setActiveFlightStep(null);
-  };
-
-  const getAIResponse = async (userText) => {
-    setStatus('Exa Reasoning...');
-    try {
-      if (!EXA_API_KEY || EXA_API_KEY.startsWith('YOUR_')) {
-        return `[Test Mode] I heard: "${userText}". Please set VITE_EXA_API_KEY.`;
-      }
-      const exa = new Exa(EXA_API_KEY);
-      
-      // Concise reasoning prompt
-      const systemContext = "You are ARC, a premium autonomous reasoning companion. Be concise, direct, and avoid repetition. Focus on accuracy over verbosity.";
-      
-      const { success, data: memories } = await searchMemory(userText);
-      const memoryPrompt = success && memories?.length > 0 
-        ? "\nRelevant context: " + memories.map(m => m.content).join(' ') : "";
-
-      const searchResult = await exa.searchAndContents(userText, { 
-        numResults: 3, 
-        useAutoprompt: true, 
-        highlights: true, 
-        text: true 
-      });
-      
-      let aiText = searchResult.results?.length > 0 
-        ? (searchResult.results[0].highlights?.[0] || searchResult.results[0].text?.substring(0, 300))
-        : "I've searched but couldn't find a specific answer to that.";
-      
-      const taskResult = await executeBackgroundTask(userText, aiText);
-      
-      // Final cleanup to ensure no double spacing or excessive repeats
-      return (aiText + taskResult).trim().replace(/\s+/g, ' ');
-    } catch (err) {
-      return "I'm experiencing a temporary connection issue. Please try again in a moment.";
-    }
   };
 
   const executeBackgroundTask = async (userTranscription, aiResponse) => {
     const text = (userTranscription + " " + aiResponse).toLowerCase();
     if (text.includes('switch to gabby')) { setPersonality('Gabby'); return " [Switched to Gabby]"; }
     if (text.includes('switch to jenny')) { setPersonality('Jenny'); return " [Switched to Jenny]"; }
-    if (text.includes('book a ride')) { setShowBookRide(true); return " [Opening Ride Booking]"; }
+    
+    // Agentic tool triggers
+    if (text.includes('book a ride') || text.includes('uber') || text.includes('bolt')) {
+      const provider = text.includes('bolt') ? 'bolt' : 'uber';
+      const destinationMatch = text.match(/(?:to|at|in)\s+([a-zA-Z\s]+)(?:\s|$)/);
+      if (destinationMatch && destinationMatch[1]) {
+        const dest = destinationMatch[1].trim();
+        setRideDestination(dest);
+        setSelectedRideProvider(provider);
+        setShowBookRide(true);
+        await geocodeDestination(dest);
+        return ` [Setting up ${provider} to ${dest}]`;
+      }
+      setShowBookRide(true);
+      return " [Opening Ride Booking]";
+    }
+
+    if (text.includes('flight') && (text.includes('track') || text.includes('monitor') || text.match(/[a-z]{2}\d{2,4}/i))) {
+      const flightMatch = text.match(/[a-z]{2}\d{2,4}/i);
+      if (flightMatch) {
+        const num = flightMatch[0].toUpperCase();
+        setFlightNumber(num);
+        const isMine = !text.includes('friend') && !text.includes('mom') && !text.includes('dad') && !text.includes('someone');
+        trackFlight(num, isMine);
+        return ` [Tracking flight ${num}${isMine ? ' (Yours)' : ' (Others)'}]`;
+      }
+      setShowFlightTracker(true);
+      return " [Opening Flight Tracker]";
+    }
+
+    if (text.includes('weather')) {
+      setActiveTool('Weather');
+      return " [Checking Weather...]";
+    }
+
     return "";
+  };
+
+  const handleFeedbackSubmit = async () => {
+    if (!feedbackText.trim()) return;
+    setStatus('Sending...');
+    try {
+      const { error } = await supabase.from('feedback').insert([{
+        user_id: user?.id,
+        username: user?.email?.split('@')[0],
+        email: user?.email,
+        content: feedbackText
+      }]);
+      if (error) throw error;
+      setFeedbackText('');
+      setShowFeedback(false);
+      setStatus('Ready');
+      alert('Feedback sent! Thank you.');
+    } catch (err) {
+      console.error('Feedback Error:', err);
+      alert('Failed to send feedback.');
+      setStatus('Ready');
+    }
+  };
+
+  const trackFlight = async (num, isMine = true) => {
+    setStatus('Tracking Flight...');
+    setTimeout(() => {
+      const mockStatus = {
+        active: true,
+        number: num,
+        status: 'On Time',
+        departure: '10:30 AM',
+        arrival: '2:45 PM',
+        lastUpdate: new Date().toLocaleTimeString(),
+        isMine
+      };
+      setFlightMonitoring(mockStatus);
+      
+      const aiResponse = isMine 
+        ? `I've started monitoring your flight ${num}. It's currently ${mockStatus.status}. I'll welcome you upon arrival!`
+        : `I've started monitoring flight ${num} for your contact. I'll keep you updated.`;
+
+      setMessages(prev => [...prev, { id: `msg-flight-${Date.now()}`, role: 'assistant', content: aiResponse, timestamp: Date.now() }]);
+      speak(aiResponse, personality);
+      setStatus('Ready');
+      
+      if (isMine) {
+        setTimeout(() => handleFlightArrival(num), 30000);
+      }
+    }, 1500);
+  };
+
+  const getAIResponse = async (userText, overridePersonality = null) => {
+    setStatus('Thinking...');
+    setIsProcessing(true);
+    try {
+      const activePersonality = overridePersonality || personality;
+      const systemContext = `You are ${activePersonality}, a premium autonomous reasoning companion. 
+        Current mode: ${isDualMode ? 'Dual Conversation with another agent' : 'Single mode'}.
+        Be concise, direct, and avoid repetition. Focus on accuracy over verbosity.
+        You have access to tools: flight tracking, ride booking, and weather.
+        If the user asks to "turn on dual conversation", confirm and tell the system to switch.
+        If the user provides flight details for someone else, acknowledge it and monitor it without a "welcome home" message.`;
+      
+      const { success, data: memories } = await searchMemory(userText);
+      const memoryPrompt = success && memories?.length > 0 
+        ? "\nRelevant context from memory: " + memories.map(m => m.content).join(' ') : "";
+
+      const historyMessages = messages.slice(-5).map(m => ({
+        role: m.role,
+        content: m.content
+      }));
+
+      const apiMessages = [
+        { role: 'system', content: systemContext + memoryPrompt },
+        ...historyMessages,
+        { role: 'user', content: userText }
+      ];
+
+      const aiText = await getOpenRouterResponse(apiMessages);
+      const taskResult = await executeBackgroundTask(userText, aiText);
+      
+      setIsProcessing(false);
+      setStatus('Ready');
+      return (aiText + taskResult).trim().replace(/\s+/g, ' ');
+    } catch (err) {
+      setIsProcessing(false);
+      setStatus('Error');
+      return "I'm experiencing a temporary connection issue. Please try again in a moment.";
+    }
   };
 
   const handleSendMessage = async (textOverride) => {
     const text = textOverride || inputText;
-    if (!text.trim()) return;
+    if (!text.trim() || isProcessing) return;
 
     const userMsg = { 
       id: `msg-user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -457,34 +618,45 @@ export default function App() {
     setMessages(prev => [...prev, userMsg]);
     setInputText('');
 
-    if (activeFlightStep === 'contact_name') {
-      const contact = emergencyContacts.find(c => c.name.toLowerCase().includes(text.toLowerCase()));
-      const responseContent = contact 
-        ? `Got it. I'll notify ${contact.name} (${contact.email}) only.` 
-        : `I couldn't find a contact named "${text}". I'll stick to notifying no one for now.`;
-      
-      const assistantMsg = {
-        id: `msg-ai-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-        role: 'assistant',
-        content: responseContent,
-        timestamp: Date.now()
-      };
+    // Voice command checks
+    const lowerText = text.toLowerCase();
+    if (lowerText.includes('turn on dual conversation')) {
+      setIsDualMode(true);
+      const resp = "Dual conversation is on.";
+      const assistantMsg = { id: Date.now().toString(), role: 'assistant', content: resp, timestamp: Date.now() };
       setMessages(prev => [...prev, assistantMsg]);
-      askAboutArrivalRide();
+      speak(resp);
+      return;
+    }
+    if (lowerText.includes('turn off dual conversation')) {
+      setIsDualMode(false);
+      const resp = "Dual conversation is off.";
+      const assistantMsg = { id: Date.now().toString(), role: 'assistant', content: resp, timestamp: Date.now() };
+      setMessages(prev => [...prev, assistantMsg]);
+      speak(resp);
       return;
     }
 
-    setStatus('Thinking...');
-    const aiText = await getAIResponse(text);
-    
-    const assistantMsg = {
-      id: `msg-ai-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      role: 'assistant',
-      content: aiText,
-      timestamp: Date.now()
-    };
-    setMessages(prev => [...prev, assistantMsg]);
-    speakText(aiText);
+    if (isDualMode) {
+      // In dual mode, both respond
+      const respJenny = await getAIResponse(text, 'Jenny');
+      setMessages(prev => [...prev, { id: `jenny-${Date.now()}`, role: 'assistant', content: respJenny, personality: 'Jenny', timestamp: Date.now() }]);
+      await speak(respJenny, 'Jenny');
+
+      const respGabby = await getAIResponse(text, 'Gabby');
+      setMessages(prev => [...prev, { id: `gabby-${Date.now()}`, role: 'assistant', content: respGabby, personality: 'Gabby', timestamp: Date.now() }]);
+      await speak(respGabby, 'Gabby');
+    } else {
+      const aiText = await getAIResponse(text);
+      const assistantMsg = {
+        id: `msg-ai-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        role: 'assistant',
+        content: aiText,
+        timestamp: Date.now()
+      };
+      setMessages(prev => [...prev, assistantMsg]);
+      speak(aiText, personality);
+    }
   };
 
   const toggleSession = () => {
@@ -568,6 +740,26 @@ export default function App() {
   };
 
   // Render Landing Page
+  const [authView, setAuthView] = useState('login'); // 'login', 'signup', 'forgot_password'
+
+  const handleForgotPassword = async () => {
+    if (!authEmail) {
+      alert('Please enter your email first.');
+      return;
+    }
+    setStatus('Sending Reset...');
+    const { error } = await supabase.auth.resetPasswordForEmail(authEmail, {
+      redirectTo: `${window.location.origin}/reset-password`,
+    });
+    if (error) {
+      alert(error.message);
+    } else {
+      alert('Password reset link sent to your email!');
+      setAuthView('login');
+    }
+    setStatus('Ready');
+  };
+
   if (currentView === 'landing') {
     return (
       <div className="min-h-screen flex flex-col bg-white dark:bg-navy-900 transition-colors duration-500 overflow-hidden relative">
@@ -630,33 +822,62 @@ export default function App() {
   // Render Auth Pages
   if (currentView === 'signin' || currentView === 'signup') {
     return (
-      <div className="min-h-screen p-8 pt-16 bg-white dark:bg-navy-900">
-        <button onClick={() => setCurrentView('landing')} className="mb-8 dark:text-white"><ArrowLeft /></button>
-        <h2 className="text-4xl font-black dark:text-white mb-2">{currentView === 'signin' ? 'Welcome Back' : 'Create Account'}</h2>
-        <p className="text-slate-500 mb-10">{currentView === 'signin' ? 'Sign in to continue to ARC' : 'Join the futuristic reasoning companion'}</p>
-        <div className="space-y-4">
-          {currentView === 'signup' && (
-            <div className="flex items-center p-4 bg-slate-50 dark:bg-navy-800 rounded-2xl border border-slate-100 dark:border-slate-700">
-              <User className="text-slate-400 mr-4" />
-              <input type="text" placeholder="Full Name" className="bg-transparent outline-none w-full dark:text-white" value={authName} onChange={e => setAuthName(e.target.value)} />
+      <div className="min-h-screen p-8 pt-16 bg-white dark:bg-navy-900 transition-colors">
+        <button onClick={() => setCurrentView('landing')} className="mb-8 dark:text-white p-2 hover:bg-slate-100 dark:hover:bg-navy-800 rounded-full transition-all"><ArrowLeft /></button>
+        
+        {authView === 'login' ? (
+          <div className="space-y-6 animate-in slide-in-from-bottom-4 duration-500">
+            <h2 className="text-4xl font-black dark:text-white mb-2">Welcome Back</h2>
+            <p className="text-slate-500 mb-10">Sign in to continue to ARC</p>
+            <div className="space-y-4">
+              <div className="flex items-center p-4 bg-slate-50 dark:bg-navy-800 rounded-2xl border border-slate-100 dark:border-slate-700">
+                <Mail className="text-slate-400 mr-4" />
+                <input type="email" placeholder="Email Address" className="bg-transparent outline-none w-full dark:text-white" value={authEmail} onChange={e => setAuthEmail(e.target.value)} />
+              </div>
+              <div className="flex items-center p-4 bg-slate-50 dark:bg-navy-800 rounded-2xl border border-slate-100 dark:border-slate-700">
+                <Lock className="text-slate-400 mr-4" />
+                <input type="password" placeholder="Password" className="bg-transparent outline-none w-full dark:text-white" value={authPassword} onChange={e => setAuthPassword(e.target.value)} />
+              </div>
+              <button onClick={() => setAuthView('forgot_password')} className="text-sm font-bold text-blue-600 hover:text-blue-700 mt-2">Forgotten Password?</button>
+              <button onClick={handleLogin} className="w-full py-4 bg-blue-600 text-white rounded-2xl font-bold text-lg mt-4 shadow-lg shadow-blue-500/25">Sign In</button>
+              <button onClick={() => setAuthView('signup')} className="w-full text-center text-blue-600 font-bold mt-4">Don't have an account? Sign Up</button>
             </div>
-          )}
-          <div className="flex items-center p-4 bg-slate-50 dark:bg-navy-800 rounded-2xl border border-slate-100 dark:border-slate-700">
-            <Mail className="text-slate-400 mr-4" />
-            <input type="email" placeholder="Email Address" className="bg-transparent outline-none w-full dark:text-white" value={authEmail} onChange={e => setAuthEmail(e.target.value)} />
           </div>
-          <div className="flex items-center p-4 bg-slate-50 dark:bg-navy-800 rounded-2xl border border-slate-100 dark:border-slate-700">
-            <Lock className="text-slate-400 mr-4" />
-            <input type="password" placeholder="Password" className="bg-transparent outline-none w-full dark:text-white" value={authPassword} onChange={e => setAuthPassword(e.target.value)} />
+        ) : authView === 'forgot_password' ? (
+          <div className="space-y-6 animate-in slide-in-from-bottom-4 duration-500">
+            <h2 className="text-4xl font-black dark:text-white mb-2">Reset Password</h2>
+            <p className="text-slate-500 mb-10">Enter your email to receive a recovery link.</p>
+            <div className="space-y-4">
+              <div className="flex items-center p-4 bg-slate-50 dark:bg-navy-800 rounded-2xl border border-slate-100 dark:border-slate-700">
+                <Mail className="text-slate-400 mr-4" />
+                <input type="email" placeholder="Email Address" className="bg-transparent outline-none w-full dark:text-white" value={authEmail} onChange={e => setAuthEmail(e.target.value)} />
+              </div>
+              <button onClick={handleForgotPassword} className="w-full py-4 bg-blue-600 text-white rounded-2xl font-bold text-lg mt-4 shadow-lg shadow-blue-500/25">Send Reset Link</button>
+              <button onClick={() => setAuthView('login')} className="w-full text-center text-slate-500 font-bold mt-4">Back to Login</button>
+            </div>
           </div>
-          <button onClick={() => setCurrentView('chat')} className="w-full py-4 bg-blue-600 text-white rounded-2xl font-bold text-lg mt-4">{currentView === 'signin' ? 'Sign In' : 'Sign Up'}</button>
-          {currentView === 'signin' && (
-            <button onClick={() => alert('Reset link sent!')} className="w-full text-center text-sm text-slate-400 font-semibold mt-2">Forgotten Password?</button>
-          )}
-          <button onClick={() => setCurrentView(currentView === 'signin' ? 'signup' : 'signin')} className="w-full text-center text-blue-600 font-bold mt-4">
-            {currentView === 'signin' ? "Don't have an account? Sign Up" : "Already have an account? Sign In"}
-          </button>
-        </div>
+        ) : (
+          <div className="space-y-6 animate-in slide-in-from-bottom-4 duration-500">
+            <h2 className="text-4xl font-black dark:text-white mb-2">Create Account</h2>
+            <p className="text-slate-500 mb-10">Join the futuristic reasoning companion</p>
+            <div className="space-y-4">
+              <div className="flex items-center p-4 bg-slate-50 dark:bg-navy-800 rounded-2xl border border-slate-100 dark:border-slate-700">
+                <User className="text-slate-400 mr-4" />
+                <input type="text" placeholder="Full Name" className="bg-transparent outline-none w-full dark:text-white" value={authName} onChange={e => setAuthName(e.target.value)} />
+              </div>
+              <div className="flex items-center p-4 bg-slate-50 dark:bg-navy-800 rounded-2xl border border-slate-100 dark:border-slate-700">
+                <Mail className="text-slate-400 mr-4" />
+                <input type="email" placeholder="Email Address" className="bg-transparent outline-none w-full dark:text-white" value={authEmail} onChange={e => setAuthEmail(e.target.value)} />
+              </div>
+              <div className="flex items-center p-4 bg-slate-50 dark:bg-navy-800 rounded-2xl border border-slate-100 dark:border-slate-700">
+                <Lock className="text-slate-400 mr-4" />
+                <input type="password" placeholder="Password" className="bg-transparent outline-none w-full dark:text-white" value={authPassword} onChange={e => setAuthPassword(e.target.value)} />
+              </div>
+              <button onClick={handleSignup} className="w-full py-4 bg-blue-600 text-white rounded-2xl font-bold text-lg mt-4 shadow-lg shadow-blue-500/25">Sign Up</button>
+              <button onClick={() => setAuthView('login')} className="w-full text-center text-blue-600 font-bold mt-4">Already have an account? Sign In</button>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -685,7 +906,9 @@ export default function App() {
             {notifications.some(n => !n.isRead) && <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full border-2 border-white dark:border-navy-900 text-[8px] flex items-center justify-center text-white font-bold">{notifications.filter(n => !n.isRead).length}</span>}
           </div>
           <button onClick={() => setIsDualMode(!isDualMode)} className={`p-2 rounded-xl transition-all ${isDualMode ? 'bg-purple-600 text-white' : 'text-slate-400'}`}><Layers size={20} /></button>
-          <button onClick={() => setPersonality(p => p === 'Jenny' ? 'Gabby' : 'Jenny')} className={`text-xs font-black uppercase tracking-widest ${personality === 'Jenny' ? 'text-blue-500' : 'text-pink-500'}`}>{personality}</button>
+          <button onClick={() => setPersonality(p => p === 'Jenny' ? 'Gabby' : 'Jenny')} className={`text-xs font-black uppercase tracking-widest ${personality === 'Jenny' ? 'text-blue-500' : 'text-pink-500'}`}>
+            {isDualMode ? 'Dual' : personality}
+          </button>
         </div>
       </header>
 
@@ -767,7 +990,7 @@ export default function App() {
             {isSessionActive && <span className="w-2 h-2 bg-red-500 rounded-full mr-2 animate-pulse" />}
             {status}
           </div>
-          <div className="uppercase tracking-widest">{personality} MODE</div>
+          <div className="uppercase tracking-widest">{isDualMode ? 'Dual Mode' : `${personality} Mode`}</div>
         </div>
       </main>
 
@@ -826,8 +1049,8 @@ export default function App() {
 
       {showSettings && (
         <div className="absolute inset-0 bg-black/60 backdrop-blur-sm z-[80] flex items-center justify-center p-6">
-          <div className="w-full max-w-md bg-white dark:bg-navy-800 rounded-[40px] p-8 space-y-8 animate-in zoom-in duration-300 relative shadow-2xl border border-slate-100 dark:border-navy-700">
-            <div className="flex justify-between items-center">
+          <div className="w-full max-w-md bg-white dark:bg-navy-800 rounded-[40px] p-8 animate-in zoom-in duration-300 relative shadow-2xl border border-slate-100 dark:border-navy-700 flex flex-col max-h-[90vh]">
+            <div className="flex justify-between items-center mb-8">
               <div>
                 <h2 className="text-3xl font-black dark:text-white leading-none">Settings</h2>
                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-2">System Configuration</p>
@@ -844,7 +1067,7 @@ export default function App() {
               </button>
             </div>
 
-            <div className="space-y-6">
+            <div className="space-y-6 overflow-y-auto pr-2 custom-scrollbar flex-1">
               <section className="space-y-4">
                 <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Preferences</h3>
                 <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-navy-900/50 rounded-2xl">
@@ -865,49 +1088,129 @@ export default function App() {
                     setNotificationToggles({ ...notificationToggles, meEmail: !notificationToggles.meEmail });
                   }} className={`w-12 h-6 rounded-full transition-all relative ${notificationToggles.meEmail ? 'bg-blue-600' : 'bg-slate-300'}`}><span className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${notificationToggles.meEmail ? 'right-1' : 'left-1'}`} /></button>
                 </div>
-                {/* Coming Soon Notification Toggles */}
-                <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-navy-900/50 rounded-2xl opacity-50">
-                  <div className="flex items-center space-x-3"><Phone className="text-slate-400" size={20} /><span className="font-bold dark:text-white">Notify via Call (Soon)</span></div>
-                  <div className="w-12 h-6 rounded-full bg-slate-200 relative"><span className="absolute top-1 left-1 w-4 h-4 bg-white rounded-full" /></div>
-                </div>
-                <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-navy-900/50 rounded-2xl opacity-50">
-                  <div className="flex items-center space-x-3"><MessageSquare className="text-slate-400" size={20} /><span className="font-bold dark:text-white">Notify via SMS (Soon)</span></div>
-                  <div className="w-12 h-6 rounded-full bg-slate-200 relative"><span className="absolute top-1 left-1 w-4 h-4 bg-white rounded-full" /></div>
-                </div>
-                <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-navy-900/50 rounded-2xl opacity-50">
-                  <div className="flex items-center space-x-3"><MessageCircle className="text-slate-400" size={20} /><span className="font-bold dark:text-white">Notify via WhatsApp (Soon)</span></div>
-                  <div className="w-12 h-6 rounded-full bg-slate-200 relative"><span className="absolute top-1 left-1 w-4 h-4 bg-white rounded-full" /></div>
+                <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-navy-900/50 rounded-2xl">
+                  <div className="flex items-center space-x-3"><Bell className="text-blue-500" size={20} /><span className="font-bold dark:text-white">Push Notifications</span></div>
+                  <button 
+                    onClick={() => {
+                      const OneSignal = window.OneSignal || [];
+                      OneSignal.push(() => {
+                        OneSignal.showNativePrompt();
+                      });
+                    }} 
+                    className="px-4 py-2 bg-blue-600 text-white text-[10px] font-black uppercase rounded-xl hover:bg-blue-700 transition-all"
+                  >
+                    Enable
+                  </button>
                 </div>
               </section>
 
               <section className="space-y-4">
-                <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Emergency Contacts</h3>
                 <button 
-                  onClick={() => setShowAddContactModal(true)} 
-                  className="w-full p-4 bg-slate-50 dark:bg-navy-900/50 rounded-2xl flex items-center justify-between font-bold dark:text-white border-2 border-dashed border-slate-200 dark:border-navy-700 hover:border-blue-500 transition-colors"
+                  onClick={() => setIsEmergencyCollapsed(!isEmergencyCollapsed)}
+                  className="w-full flex items-center justify-between text-[10px] font-black uppercase text-slate-400 tracking-widest hover:text-blue-500 transition-colors"
                 >
-                  <span>Add Email</span>
-                  <PlusCircle size={20} className="text-blue-500" />
+                  <span>Emergency Contacts</span>
+                  <ChevronRight className={`transition-transform duration-300 ${!isEmergencyCollapsed ? 'rotate-90' : ''}`} size={16} />
                 </button>
-                <div className="w-full p-4 bg-slate-50 dark:bg-navy-900/50 rounded-2xl flex items-center justify-between font-bold dark:text-slate-400 border-2 border-dashed border-slate-100 dark:border-navy-800 opacity-50 cursor-not-allowed"><span>Add Contacts (Soon)</span><PlusCircle size={20} className="text-slate-300" /></div>
-                {emergencyContacts.map((c, i) => (
-                  <div key={i} className="p-3 ml-4 border-l-2 border-blue-500">
-                    <p className="text-sm font-bold dark:text-white">{c.name}</p>
-                    <p className="text-xs text-slate-500">{c.email}</p>
+                
+                {!isEmergencyCollapsed && (
+                  <div className="space-y-4 animate-in slide-in-from-top-2 duration-300">
+                    <button 
+                      onClick={() => setShowAddContactModal(true)} 
+                      className="w-full p-4 bg-slate-50 dark:bg-navy-900/50 rounded-2xl flex items-center justify-between font-bold dark:text-white border-2 border-dashed border-slate-200 dark:border-navy-700 hover:border-blue-500 transition-colors"
+                    >
+                      <span>Add Email</span>
+                      <PlusCircle size={20} className="text-blue-500" />
+                    </button>
+                    {emergencyContacts.map((c, i) => (
+                      <div key={i} className="p-3 ml-4 border-l-2 border-blue-500 bg-slate-50 dark:bg-navy-900/30 rounded-r-xl">
+                        <p className="text-sm font-bold dark:text-white">{c.name}</p>
+                        <p className="text-xs text-slate-500">{c.email}</p>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
+              </section>
+
+              <section className="space-y-4">
+                <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Support</h3>
+                <button 
+                  onClick={() => setShowFeedback(true)}
+                  className="w-full p-4 bg-slate-50 dark:bg-navy-900/50 rounded-2xl flex items-center justify-between font-bold dark:text-white border border-slate-100 dark:border-navy-700 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-all"
+                >
+                  <div className="flex items-center space-x-3">
+                    <MessageSquare size={20} className="text-blue-500" />
+                    <span>Send Feedback</span>
+                  </div>
+                  <ChevronRight size={16} className="text-slate-400" />
+                </button>
               </section>
 
               <div className="pt-4 space-y-3">
                 <button 
                   onClick={() => setShowSettings(false)} 
-                  className="w-full p-4 bg-blue-600 text-white rounded-2xl font-bold flex items-center justify-center shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition-all"
+                  className="w-full py-4 bg-blue-600 text-white rounded-2xl font-bold flex items-center justify-center shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition-all"
                 >
                   Done
                 </button>
-                <button onClick={() => { setCurrentView('landing'); setShowSettings(false); }} className="w-full p-4 bg-red-50 dark:bg-red-900/20 text-red-500 rounded-2xl font-bold flex items-center justify-center space-x-2"><LogOut size={20} /><span>Sign Out</span></button>
+                <button onClick={() => { setCurrentView('landing'); setShowSettings(false); }} className="w-full py-4 bg-red-50 dark:bg-red-900/20 text-red-500 rounded-2xl font-bold flex items-center justify-center space-x-2"><LogOut size={20} /><span>Sign Out</span></button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {showFeedback && (
+        <div className="absolute inset-0 bg-black/60 backdrop-blur-md z-[100] flex items-center justify-center p-6">
+          <div className="w-full max-w-sm bg-white dark:bg-navy-800 rounded-[32px] p-8 space-y-6 animate-in zoom-in duration-300 shadow-2xl border border-slate-100 dark:border-navy-700">
+            <h2 className="text-2xl font-black dark:text-white">Feedback</h2>
+            <p className="text-sm text-slate-500 dark:text-slate-400">Tell us how we can improve ARC.</p>
+            <textarea 
+              className="w-full h-32 p-4 bg-slate-50 dark:bg-navy-900 rounded-2xl border border-slate-100 dark:border-navy-700 focus:border-blue-500 outline-none text-sm dark:text-white resize-none"
+              placeholder="Write your feedback here..."
+              value={feedbackText}
+              onChange={(e) => setFeedbackText(e.target.value)}
+            />
+            <div className="flex space-x-3 pt-2">
+              <button onClick={() => setShowFeedback(false)} className="flex-1 py-4 text-slate-500 font-bold hover:bg-slate-50 dark:hover:bg-navy-900 rounded-2xl transition-colors">Cancel</button>
+              <button onClick={handleFeedbackSubmit} className="flex-1 py-4 bg-blue-600 text-white rounded-2xl font-bold shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition-all">Send</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTool === 'Weather' && (
+        <div className="absolute inset-0 bg-black/60 backdrop-blur-md z-[70] flex items-center justify-center p-6">
+          <div className="w-full max-w-sm bg-white dark:bg-navy-800 rounded-[32px] p-8 space-y-6 animate-in zoom-in duration-300 shadow-2xl border border-slate-100 dark:border-navy-700">
+            <div className="flex justify-between items-center">
+              <div>
+                <h2 className="text-2xl font-black dark:text-white">Weather</h2>
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">Real-time Forecast</p>
+              </div>
+              <button onClick={() => setActiveTool(null)} className="p-2 hover:bg-slate-100 dark:hover:bg-navy-900 rounded-full transition-colors"><X size={24} className="text-slate-400" /></button>
+            </div>
+            <div className="flex flex-col items-center py-8 space-y-4">
+              <Sun size={64} className="text-yellow-400 animate-pulse" />
+              <div className="text-center">
+                <p className="text-5xl font-black dark:text-white">72°F</p>
+                <p className="font-bold text-slate-500 uppercase tracking-widest mt-2">Sunny • San Francisco</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="p-3 bg-slate-50 dark:bg-navy-900/50 rounded-2xl text-center">
+                <p className="text-[10px] font-black text-slate-400 uppercase">Wind</p>
+                <p className="font-bold dark:text-white">12mph</p>
+              </div>
+              <div className="p-3 bg-slate-50 dark:bg-navy-900/50 rounded-2xl text-center">
+                <p className="text-[10px] font-black text-slate-400 uppercase">Humid</p>
+                <p className="font-bold dark:text-white">45%</p>
+              </div>
+              <div className="p-3 bg-slate-50 dark:bg-navy-900/50 rounded-2xl text-center">
+                <p className="text-[10px] font-black text-slate-400 uppercase">UV</p>
+                <p className="font-bold dark:text-white">High</p>
+              </div>
+            </div>
+            <button onClick={() => setActiveTool(null)} className="w-full py-4 bg-blue-600 text-white rounded-2xl font-bold shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition-all">Close</button>
           </div>
         </div>
       )}

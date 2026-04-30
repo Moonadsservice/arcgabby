@@ -17,6 +17,7 @@ export const useDeepgramAudio = (onTranscript, options = {}) => {
 
   const startListening = useCallback(async () => {
     if (isListening) return;
+    console.log('Deepgram: Initializing stream and socket...');
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -28,6 +29,7 @@ export const useDeepgramAudio = (onTranscript, options = {}) => {
       ]);
 
       socket.onopen = () => {
+        console.log('Deepgram: WebSocket connection established');
         setStatus('Listening...');
         setIsListening(true);
         
@@ -46,6 +48,7 @@ export const useDeepgramAudio = (onTranscript, options = {}) => {
         const transcript = received.channel?.alternatives[0]?.transcript;
 
         if (transcript && received.is_final) {
+          console.log('Deepgram: Transcript received:', transcript);
           currentTranscriptRef.current += ' ' + transcript;
           onTranscript(currentTranscriptRef.current.trim(), true);
           
@@ -53,6 +56,7 @@ export const useDeepgramAudio = (onTranscript, options = {}) => {
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
           silenceTimerRef.current = setTimeout(() => {
             if (currentTranscriptRef.current.trim()) {
+              console.log('Deepgram: Silence detected, triggering processing');
               onTranscript(currentTranscriptRef.current.trim(), 'silence');
               currentTranscriptRef.current = '';
             }
@@ -66,6 +70,7 @@ export const useDeepgramAudio = (onTranscript, options = {}) => {
       };
 
       socket.onclose = () => {
+        console.log('Deepgram: WebSocket connection closed');
         setIsListening(false);
         setStatus('Ready');
       };
@@ -78,6 +83,7 @@ export const useDeepgramAudio = (onTranscript, options = {}) => {
   }, [apiKey, isListening, onTranscript, silenceThreshold]);
 
   const stopListening = useCallback(() => {
+    console.log('Deepgram: Manually stopping listening...');
     if (mediaRecorderRef.current) {
       mediaRecorderRef.current.stop();
       mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());

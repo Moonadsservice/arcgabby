@@ -168,6 +168,7 @@ export default function App() {
   const [isEmergencyCollapsed, setIsEmergencyCollapsed] = useState(true);
   const [user, setUser] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
 
   // Initialize Audio Hook
   const { isListening, status: audioStatus, startListening, stopListening, speak } = useDeepgramAudio(
@@ -188,26 +189,36 @@ export default function App() {
 
   // Supabase Auth Listener
   useEffect(() => {
+    console.log('Initializing Auth Listener...');
     supabase?.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
+      console.log('Initial session check:', session ? 'User logged in' : 'No session');
       if (session?.user) {
+        setUser(session.user);
         setUserEmail(session.user.email);
         loadUserSessions(session.user.id);
       }
+      setIsAuthLoading(false);
     });
 
-    const { data: { subscription } } = supabase?.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase?.auth.onAuthStateChange((event, session) => {
+      console.log('Auth state change event:', event, session ? 'Session exists' : 'No session');
       setUser(session?.user ?? null);
       if (session?.user) {
         setUserEmail(session.user.email);
         loadUserSessions(session.user.id);
-      } else {
+      } else if (event === 'SIGNED_OUT') {
+        console.log('User signed out, redirecting to landing...');
         setUserEmail('');
         setCurrentView('landing');
+        localStorage.removeItem('currentView');
       }
+      setIsAuthLoading(false);
     });
 
-    return () => subscription?.unsubscribe();
+    return () => {
+      console.log('Unsubscribing from Auth Listener');
+      subscription?.unsubscribe();
+    };
   }, []);
 
   const loadUserSessions = async (userId) => {
@@ -664,9 +675,14 @@ export default function App() {
     const text = textOverride || inputText;
     if (!text.trim() || isProcessing) return;
 
+    console.log('Sending message:', text);
+
     // Alexa-style: Pause listening while processing/speaking
     const wasListening = isSessionActive;
-    if (wasListening) stopListening();
+    if (wasListening) {
+      console.log('Pausing listening for processing...');
+      stopListening();
+    }
 
     const userMsg = { 
       id: `msg-user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -685,7 +701,10 @@ export default function App() {
       const assistantMsg = { id: Date.now().toString(), role: 'assistant', content: resp, timestamp: Date.now() };
       setMessages(prev => [...prev, assistantMsg]);
       await speak(resp);
-      if (wasListening) startListening();
+      if (wasListening) {
+        console.log('Resuming listening after dual mode toggle...');
+        startListening();
+      }
       return;
     }
     if (lowerText.includes('turn off dual conversation')) {
@@ -694,21 +713,28 @@ export default function App() {
       const assistantMsg = { id: Date.now().toString(), role: 'assistant', content: resp, timestamp: Date.now() };
       setMessages(prev => [...prev, assistantMsg]);
       await speak(resp);
-      if (wasListening) startListening();
+      if (wasListening) {
+        console.log('Resuming listening after dual mode toggle...');
+        startListening();
+      }
       return;
     }
 
     try {
       if (isDualMode) {
+        console.log('Dual mode active, getting responses from both agents...');
         setIsVoiceEnabled(true); // Voice must be on in Dual mode
+        
         const respJenny = await getAIResponse(text, 'Jenny');
         const jennyMsg = { id: `jenny-${Date.now()}`, role: 'assistant', content: respJenny, personality: 'Jenny', timestamp: Date.now() };
         setMessages(prev => [...prev, jennyMsg]);
+        console.log('Jenny responding...');
         await speak(respJenny, 'Jenny');
 
         const respGabby = await getAIResponse(text, 'Gabby');
         const gabbyMsg = { id: `gabby-${Date.now()}`, role: 'assistant', content: respGabby, personality: 'Gabby', timestamp: Date.now() };
         setMessages(prev => [...prev, gabbyMsg]);
+        console.log('Gabby responding...');
         await speak(respGabby, 'Gabby');
       } else {
         const aiText = await getAIResponse(text);
@@ -719,13 +745,16 @@ export default function App() {
           timestamp: Date.now()
         };
         setMessages(prev => [...prev, assistantMsg]);
+        console.log('Assistant responding...');
         await speak(aiText, personality);
       }
     } catch (err) {
       console.error('Error in handleSendMessage:', err);
+      setStatus('Error');
     } finally {
       // Alexa-style: Resume listening if session is still active
       if (wasListening && isSessionActiveRef.current) {
+        console.log('Processing complete, resuming continuous listening...');
         startListening();
       }
     }
@@ -836,6 +865,15 @@ export default function App() {
       return [sessionToSave, ...prev];
     });
   };
+
+  if (isAuthLoading) {
+    return (
+      <div className="h-screen w-full flex flex-col items-center justify-center bg-white dark:bg-navy-900">
+        <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-4" />
+        <p className="text-slate-500 font-bold uppercase tracking-widest animate-pulse">Initializing ARC...</p>
+      </div>
+    );
+  }
 
   // Render Landing Page
   const [authView, setAuthView] = useState(() => {

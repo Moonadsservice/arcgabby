@@ -81,6 +81,8 @@ export default function App() {
   const [authName, setAuthName] = useState('');
   const [historyFilter, setHistoryFilter] = useState('All');
   const [activeTool, setActiveTool] = useState(null);
+  const [weatherSearchQuery, setWeatherSearchQuery] = useState('');
+  const [isWeatherSearching, setIsWeatherSearching] = useState(false);
   const [weatherData, setWeatherData] = useState(() => {
     const saved = localStorage.getItem('weatherData');
     return saved ? JSON.parse(saved) : null;
@@ -145,6 +147,14 @@ export default function App() {
   const [deferredPrompt, setDeferredPrompt] = useState(null);
 
   useEffect(() => {
+    if (userEmail) {
+      localStorage.setItem('userEmail', userEmail);
+    } else {
+      localStorage.removeItem('userEmail');
+    }
+  }, [userEmail]);
+
+  useEffect(() => {
     window.addEventListener('beforeinstallprompt', (e) => {
       e.preventDefault();
       setDeferredPrompt(e);
@@ -191,6 +201,9 @@ export default function App() {
       if (session?.user) {
         setUserEmail(session.user.email);
         loadUserSessions(session.user.id);
+      } else {
+        setUserEmail('');
+        setCurrentView('landing');
       }
     });
 
@@ -459,6 +472,35 @@ export default function App() {
     setActiveFlightStep(null);
   };
 
+  const handleWeatherSearch = async (location) => {
+    if (!location?.trim()) return;
+    setIsWeatherSearching(true);
+    setStatus(`Checking weather for ${location}...`);
+    try {
+      const res = await fetchWeather(location);
+      if (res.success) {
+        setWeatherData(res.data);
+        setActiveTool('Weather');
+        return res.data;
+      } else {
+        console.error('Weather error:', res.error);
+        setMessages(prev => [...prev, { 
+          id: `err-${Date.now()}`, 
+          role: 'assistant', 
+          content: `I couldn't find weather info for "${location}". Please check the city name.`,
+          timestamp: Date.now() 
+        }]);
+        return null;
+      }
+    } catch (err) {
+      console.error('Weather Search Exception:', err);
+      return null;
+    } finally {
+      setIsWeatherSearching(false);
+      setStatus('Ready');
+    }
+  };
+
   const executeBackgroundTask = async (userTranscription, aiResponse) => {
     const text = (userTranscription + " " + aiResponse).toLowerCase();
     if (text.includes('switch to gabby')) { setPersonality('Gabby'); return " [Switched to Gabby]"; }
@@ -474,24 +516,23 @@ export default function App() {
         setSelectedRideProvider(provider);
         const coords = await geocodeDestination(dest);
         if (coords) {
-          // Document it in the session history instead of notifying
           const docMsg = { 
             id: `doc-${Date.now()}`, 
             role: 'assistant', 
-            content: `Documented: Initiated ${provider} booking to ${dest}.`,
+            content: `Autonomous Action: Initiated ${provider} booking to ${dest}.`,
             timestamp: Date.now() 
           };
           setMessages(prev => [...prev, docMsg]);
-          
           setShowBookRide(true);
           if (text.includes('now') || text.includes('instantly')) {
             openRideApp(provider, coords);
           }
-          return ` [Setting up ${provider} to ${dest}]`;
+          return ` [Success: ${provider} to ${dest} initiated]`;
         }
+        return ` [Error: Could not find location ${dest}]`;
       }
       setShowBookRide(true);
-      return " [Opening Ride Booking]";
+      return " [Opening Ride Booking Interface]";
     }
 
     if (text.includes('flight') && (text.includes('track') || text.includes('monitor') || text.match(/[a-z]{2}\d{2,4}/i))) {
@@ -499,10 +540,9 @@ export default function App() {
       if (flightMatch) {
         const num = flightMatch[0].toUpperCase();
         setFlightNumber(num);
-        // "Wise" flight ownership detection
         const isMine = !text.includes('friend') && !text.includes('mom') && !text.includes('dad') && !text.includes('someone') && !text.includes('his') && !text.includes('her') && !text.includes('their');
-        trackFlight(num, isMine);
-        return ` [Tracking flight ${num}${isMine ? ' (Yours)' : ' (Others)'}]`;
+        const status = await trackFlight(num, isMine);
+        return ` [Autonomous Action: Tracking flight ${num}. Status: ${status.status}]`;
       }
       setShowFlightTracker(true);
       return " [Opening Flight Tracker]";
@@ -510,25 +550,13 @@ export default function App() {
 
     if (text.includes('weather')) {
       const locationMatch = text.match(/(?:in|at|for)\s+([a-zA-Z\s,]+)(?:\s|$)/);
-      const location = locationMatch ? locationMatch[1].trim() : 'London'; // Default to London if not specified
+      const location = locationMatch ? locationMatch[1].trim() : 'London';
       
-      setStatus(`Checking weather for ${location}...`);
-      fetchWeather(location).then(res => {
-        if (res.success) {
-          setWeatherData(res.data);
-          setActiveTool('Weather');
-        } else {
-          console.error('Weather error:', res.error);
-          setMessages(prev => [...prev, { 
-            id: `err-${Date.now()}`, 
-            role: 'assistant', 
-            content: `I couldn't find weather info for "${location}". Please check the location name.`,
-            timestamp: Date.now() 
-          }]);
-        }
-        setStatus('Ready');
-      });
-      return ` [Checking weather for ${location}...]`;
+      const data = await handleWeatherSearch(location);
+      if (data) {
+        return ` [Weather for ${location}: ${data.temp}°F, ${data.condition}]`;
+      }
+      return ` [Failed to fetch weather for ${location}]`;
     }
 
     return "";
@@ -558,30 +586,33 @@ export default function App() {
 
   const trackFlight = async (num, isMine = true) => {
     setStatus('Tracking Flight...');
-    setTimeout(() => {
-      const mockStatus = {
-        active: true,
-        number: num,
-        status: 'On Time',
-        departure: '10:30 AM',
-        arrival: '2:45 PM',
-        lastUpdate: new Date().toLocaleTimeString(),
-        isMine
-      };
-      setFlightMonitoring(mockStatus);
-      
-      const aiResponse = isMine 
-        ? `I've started monitoring your flight ${num}. It's currently ${mockStatus.status}. I'll welcome you upon arrival!`
-        : `I've started monitoring flight ${num} for your contact. I'll keep you updated.`;
+    return new Promise((resolve) => {
+      setTimeout(() => {
+        const mockStatus = {
+          active: true,
+          number: num,
+          status: 'On Time',
+          departure: '10:30 AM',
+          arrival: '2:45 PM',
+          lastUpdate: new Date().toLocaleTimeString(),
+          isMine
+        };
+        setFlightMonitoring(mockStatus);
+        
+        const aiResponse = isMine 
+          ? `I've started monitoring your flight ${num}. It's currently ${mockStatus.status}. I'll welcome you upon arrival!`
+          : `I've started monitoring flight ${num} for your contact. I'll keep you updated.`;
 
-      setMessages(prev => [...prev, { id: `msg-flight-${Date.now()}`, role: 'assistant', content: aiResponse, timestamp: Date.now() }]);
-      speak(aiResponse, personality);
-      setStatus('Ready');
-      
-      if (isMine) {
-        setTimeout(() => handleFlightArrival(num), 30000);
-      }
-    }, 1500);
+        setMessages(prev => [...prev, { id: `msg-flight-${Date.now()}`, role: 'assistant', content: aiResponse, timestamp: Date.now() }]);
+        speak(aiResponse, personality);
+        setStatus('Ready');
+        
+        if (isMine) {
+          setTimeout(() => handleFlightArrival(num), 30000);
+        }
+        resolve(mockStatus);
+      }, 1500);
+    });
   };
 
   const getAIResponse = async (userText, overridePersonality = null) => {
@@ -589,12 +620,17 @@ export default function App() {
     setIsProcessing(true);
     try {
       const activePersonality = overridePersonality || personality;
-      const systemContext = `You are ${activePersonality}, a premium autonomous reasoning companion. 
+      const systemContext = `You are ${activePersonality}, a premium autonomous reasoning companion (ARC).
+        You are highly intelligent, proactive, and capable of complex reasoning.
         Current mode: ${isDualMode ? 'Dual Conversation with another agent' : 'Single mode'}.
-        Be concise, direct, and avoid repetition. Focus on accuracy over verbosity.
-        You have access to tools: flight tracking, ride booking, and weather.
-        If the user asks to "turn on dual conversation", confirm and tell the system to switch.
-        If the user provides flight details for someone else, acknowledge it and monitor it without a "welcome home" message.`;
+        
+        Guidelines:
+        - Be concise but extremely helpful.
+        - Use your tools (weather, flight tracking, ride booking) proactively when relevant.
+        - Maintain a sophisticated, professional, yet approachable tone.
+        - If in Dual mode, coordinate with the other agent to provide a comprehensive perspective.
+        - Never repeat yourself or the other agent.
+        - Focus on "Real Actions" - if a user mentions a need, offer to use a tool or document it.`;
       
       const { success, data: memories } = await searchMemory(userText);
       const memoryPrompt = success && memories?.length > 0 
@@ -628,6 +664,10 @@ export default function App() {
     const text = textOverride || inputText;
     if (!text.trim() || isProcessing) return;
 
+    // Alexa-style: Pause listening while processing/speaking
+    const wasListening = isSessionActive;
+    if (wasListening) stopListening();
+
     const userMsg = { 
       id: `msg-user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       role: 'user', 
@@ -644,7 +684,8 @@ export default function App() {
       const resp = "Dual conversation is on.";
       const assistantMsg = { id: Date.now().toString(), role: 'assistant', content: resp, timestamp: Date.now() };
       setMessages(prev => [...prev, assistantMsg]);
-      speak(resp);
+      await speak(resp);
+      if (wasListening) startListening();
       return;
     }
     if (lowerText.includes('turn off dual conversation')) {
@@ -652,29 +693,41 @@ export default function App() {
       const resp = "Dual conversation is off.";
       const assistantMsg = { id: Date.now().toString(), role: 'assistant', content: resp, timestamp: Date.now() };
       setMessages(prev => [...prev, assistantMsg]);
-      speak(resp);
+      await speak(resp);
+      if (wasListening) startListening();
       return;
     }
 
-    if (isDualMode) {
-      setIsVoiceEnabled(true); // Voice must be on in Dual mode
-      const respJenny = await getAIResponse(text, 'Jenny');
-      setMessages(prev => [...prev, { id: `jenny-${Date.now()}`, role: 'assistant', content: respJenny, personality: 'Jenny', timestamp: Date.now() }]);
-      await speak(respJenny, 'Jenny');
+    try {
+      if (isDualMode) {
+        setIsVoiceEnabled(true); // Voice must be on in Dual mode
+        const respJenny = await getAIResponse(text, 'Jenny');
+        const jennyMsg = { id: `jenny-${Date.now()}`, role: 'assistant', content: respJenny, personality: 'Jenny', timestamp: Date.now() };
+        setMessages(prev => [...prev, jennyMsg]);
+        await speak(respJenny, 'Jenny');
 
-      const respGabby = await getAIResponse(text, 'Gabby');
-      setMessages(prev => [...prev, { id: `gabby-${Date.now()}`, role: 'assistant', content: respGabby, personality: 'Gabby', timestamp: Date.now() }]);
-      await speak(respGabby, 'Gabby');
-    } else {
-      const aiText = await getAIResponse(text);
-      const assistantMsg = {
-        id: `msg-ai-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-        role: 'assistant',
-        content: aiText,
-        timestamp: Date.now()
-      };
-      setMessages(prev => [...prev, assistantMsg]);
-      speak(aiText, personality);
+        const respGabby = await getAIResponse(text, 'Gabby');
+        const gabbyMsg = { id: `gabby-${Date.now()}`, role: 'assistant', content: respGabby, personality: 'Gabby', timestamp: Date.now() };
+        setMessages(prev => [...prev, gabbyMsg]);
+        await speak(respGabby, 'Gabby');
+      } else {
+        const aiText = await getAIResponse(text);
+        const assistantMsg = {
+          id: `msg-ai-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          role: 'assistant',
+          content: aiText,
+          timestamp: Date.now()
+        };
+        setMessages(prev => [...prev, assistantMsg]);
+        await speak(aiText, personality);
+      }
+    } catch (err) {
+      console.error('Error in handleSendMessage:', err);
+    } finally {
+      // Alexa-style: Resume listening if session is still active
+      if (wasListening && isSessionActiveRef.current) {
+        startListening();
+      }
     }
   };
 
@@ -1267,7 +1320,11 @@ export default function App() {
                 >
                   Done
                 </button>
-                <button onClick={() => { setCurrentView('landing'); setShowSettings(false); }} className="w-full py-4 bg-red-50 dark:bg-red-900/20 text-red-500 rounded-2xl font-bold flex items-center justify-center space-x-2"><LogOut size={20} /><span>Sign Out</span></button>
+                <button onClick={async () => { 
+                  await supabase?.auth.signOut();
+                  setCurrentView('landing'); 
+                  setShowSettings(false); 
+                }} className="w-full py-4 bg-red-50 dark:bg-red-900/20 text-red-500 rounded-2xl font-bold flex items-center justify-center space-x-2"><LogOut size={20} /><span>Sign Out</span></button>
               </div>
             </div>
           </div>
@@ -1301,14 +1358,37 @@ export default function App() {
                 <h2 className="text-2xl font-black dark:text-white">Weather</h2>
                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">Real-time Forecast</p>
               </div>
-              <button onClick={() => setActiveTool(null)} className="p-2 hover:bg-slate-100 dark:hover:bg-navy-900 rounded-full transition-colors"><X size={24} className="text-slate-400" /></button>
+              <button onClick={() => { setActiveTool(null); setWeatherSearchQuery(''); }} className="p-2 hover:bg-slate-100 dark:hover:bg-navy-900 rounded-full transition-colors"><X size={24} className="text-slate-400" /></button>
+            </div>
+
+            {/* Weather Search Interface */}
+            <div className="space-y-4">
+              <div className="flex items-center p-4 bg-slate-50 dark:bg-navy-900 rounded-2xl border border-slate-100 dark:border-navy-700 focus-within:border-blue-500 transition-colors">
+                <Search className="text-slate-400 mr-4" size={20} />
+                <input 
+                  type="text" 
+                  placeholder="Search City..." 
+                  className="bg-transparent outline-none w-full dark:text-white font-medium" 
+                  value={weatherSearchQuery}
+                  onChange={(e) => setWeatherSearchQuery(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleWeatherSearch(weatherSearchQuery)}
+                />
+                {isWeatherSearching && <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin ml-2" />}
+              </div>
+              <button 
+                onClick={() => handleWeatherSearch(weatherSearchQuery)}
+                disabled={isWeatherSearching || !weatherSearchQuery.trim()}
+                className="w-full py-4 bg-blue-600 text-white rounded-2xl font-bold shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition-all disabled:opacity-50 disabled:hover:bg-blue-600"
+              >
+                {isWeatherSearching ? 'Searching...' : 'Check Weather'}
+              </button>
             </div>
             
             {weatherData ? (
-              <>
-                <div className="flex flex-col items-center py-8 space-y-4">
+              <div className="animate-in fade-in slide-in-from-top-4 duration-500">
+                <div className="flex flex-col items-center py-6 space-y-4">
                   {weatherData.icon ? (
-                    <img src={`https://openweathermap.org/img/wn/${weatherData.icon}@4x.png`} alt={weatherData.condition} className="w-32 h-32 animate-pulse" />
+                    <img src={`https://openweathermap.org/img/wn/${weatherData.icon}@4x.png`} alt={weatherData.condition} className="w-32 h-32" />
                   ) : (
                     <Sun size={64} className="text-yellow-400 animate-pulse" />
                   )}
@@ -1318,28 +1398,27 @@ export default function App() {
                   </div>
                 </div>
                 <div className="grid grid-cols-3 gap-3">
-                  <div className="p-3 bg-slate-50 dark:bg-navy-900/50 rounded-2xl text-center">
+                  <div className="p-3 bg-slate-50 dark:bg-navy-900/50 rounded-2xl text-center border border-slate-100 dark:border-navy-700">
                     <p className="text-[10px] font-black text-slate-400 uppercase">Wind</p>
                     <p className="font-bold dark:text-white">{weatherData.wind}mph</p>
                   </div>
-                  <div className="p-3 bg-slate-50 dark:bg-navy-900/50 rounded-2xl text-center">
+                  <div className="p-3 bg-slate-50 dark:bg-navy-900/50 rounded-2xl text-center border border-slate-100 dark:border-navy-700">
                     <p className="text-[10px] font-black text-slate-400 uppercase">Humid</p>
                     <p className="font-bold dark:text-white">{weatherData.humidity}%</p>
                   </div>
-                  <div className="p-3 bg-slate-50 dark:bg-navy-900/50 rounded-2xl text-center">
+                  <div className="p-3 bg-slate-50 dark:bg-navy-900/50 rounded-2xl text-center border border-slate-100 dark:border-navy-700">
                     <p className="text-[10px] font-black text-slate-400 uppercase">Condition</p>
                     <p className="font-bold dark:text-white text-[10px] truncate">{weatherData.description}</p>
                   </div>
                 </div>
-              </>
-            ) : (
-              <div className="py-20 text-center">
-                <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-                <p className="text-slate-400 font-bold uppercase tracking-widest">Loading Forecast...</p>
+              </div>
+            ) : !isWeatherSearching && (
+              <div className="py-10 text-center opacity-40 italic text-slate-500">
+                Enter a city name to see the forecast
               </div>
             )}
             
-            <button onClick={() => setActiveTool(null)} className="w-full py-4 bg-blue-600 text-white rounded-2xl font-bold shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition-all">Close</button>
+            <button onClick={() => { setActiveTool(null); setWeatherSearchQuery(''); }} className="w-full py-4 border-2 border-slate-100 dark:border-navy-700 dark:text-white rounded-2xl font-bold hover:bg-slate-50 dark:hover:bg-navy-900 transition-all">Close</button>
           </div>
         </div>
       )}

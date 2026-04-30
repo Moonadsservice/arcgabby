@@ -1,9 +1,10 @@
 const OPENROUTER_API_KEY = import.meta.env.VITE_OPENROUTER_API_KEY;
 
 const FREE_MODELS = [
-  'mistralai/mistral-7b-instruct:free',
-  'google/gemma-7b-it:free',
-  'meta-llama/llama-3-8b-instruct:free'
+  'meta-llama/llama-3.1-8b-instruct:free',
+  'google/gemini-pro-1.5:free',
+  'mistralai/pixtral-12b:free',
+  'qwen/qwen-2-7b-instruct:free'
 ];
 
 export const getOpenRouterResponse = async (messages, modelIndex = 0) => {

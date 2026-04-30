@@ -46,28 +46,18 @@ import { fetchWeather } from './src/utils/weather';
 const DEEPGRAM_API_KEY = import.meta.env.VITE_DEEPGRAM_API_KEY;
 const ONESIGNAL_APP_ID = import.meta.env.VITE_ONESIGNAL_APP_ID;
 
-// Helper for safe JSON parsing
-const safeJsonParse = (str, fallback) => {
-  try {
-    return str ? JSON.parse(str) : fallback;
-  } catch (e) {
-    console.error('Error parsing JSON from localStorage:', e);
-    return fallback;
-  }
-};
-
 export default function App() {
   const [isDarkMode, setIsDarkMode] = useState(() => {
     const saved = localStorage.getItem('darkMode');
-    if (saved === null) return window.matchMedia('(prefers-color-scheme: dark)').matches;
-    return safeJsonParse(saved, window.matchMedia('(prefers-color-scheme: dark)').matches);
+    return saved ? JSON.parse(saved) : window.matchMedia('(prefers-color-scheme: dark)').matches;
   });
 
   const [status, setStatus] = useState('Ready');
   const [isSessionActive, setIsSessionActive] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [messages, setMessages] = useState(() => {
-    return safeJsonParse(localStorage.getItem('currentMessages'), []);
+    const saved = localStorage.getItem('currentMessages');
+    return saved ? JSON.parse(saved) : [];
   });
   const [tasks, setTasks] = useState([]);
   const [currentTranscription, setCurrentTranscription] = useState('');
@@ -94,7 +84,8 @@ export default function App() {
   const [weatherSearchQuery, setWeatherSearchQuery] = useState('');
   const [isWeatherSearching, setIsWeatherSearching] = useState(false);
   const [weatherData, setWeatherData] = useState(() => {
-    return safeJsonParse(localStorage.getItem('weatherData'), null);
+    const saved = localStorage.getItem('weatherData');
+    return saved ? JSON.parse(saved) : null;
   });
 
   useEffect(() => {
@@ -103,7 +94,8 @@ export default function App() {
     }
   }, [weatherData]);
   const [sessions, setSessions] = useState(() => {
-    return safeJsonParse(localStorage.getItem('sessions'), []);
+    const saved = localStorage.getItem('sessions');
+    return saved ? JSON.parse(saved) : [];
   });
   const [currentSessionId, setCurrentSessionId] = useState(Date.now().toString());
   const [currentSessionName, setCurrentSessionName] = useState('New Session');
@@ -120,13 +112,14 @@ export default function App() {
   const [showFlightTracker, setShowFlightTracker] = useState(false);
   const [flightNumber, setFlightNumber] = useState('');
   const [notificationToggles, setNotificationToggles] = useState(() => {
-    return safeJsonParse(localStorage.getItem('notificationToggles'), {
+    const saved = localStorage.getItem('notificationToggles');
+    return saved ? JSON.parse(saved) : {
       emergencyEmail: false,
       meEmail: false,
       call: false,
       sms: false,
       whatsapp: false
-    });
+    };
   });
 
   useEffect(() => {
@@ -177,13 +170,30 @@ export default function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
 
-  const [authView, setAuthView] = useState(() => {
-    return localStorage.getItem('authView') || 'login';
-  });
-
+  // Load emergency contacts from Supabase
   useEffect(() => {
-    localStorage.setItem('authView', authView);
-  }, [authView]);
+    const loadEmergencyContacts = async () => {
+      if (user) {
+        const { data, error } = await supabase
+          .from('emergency_contacts')
+          .select('*')
+          .eq('user_id', user.id);
+        if (data) setEmergencyContacts(data);
+      }
+    };
+    loadEmergencyContacts();
+  }, [user]);
+
+  // Sync emergency contacts to Supabase
+  const addEmergencyContact = async (name, email) => {
+    if (user) {
+      const { data, error } = await supabase
+        .from('emergency_contacts')
+        .insert([{ user_id: user.id, name, email }])
+        .select();
+      if (data) setEmergencyContacts(prev => [...prev, data[0]]);
+    }
+  };
 
   // Initialize Audio Hook
   const { isListening, status: audioStatus, startListening, stopListening, speak } = useDeepgramAudio(
@@ -196,6 +206,11 @@ export default function App() {
     },
     { apiKey: DEEPGRAM_API_KEY }
   );
+
+  // Sync session active ref with state
+  useEffect(() => {
+    isSessionActiveRef.current = isSessionActive;
+  }, [isSessionActive]);
 
   useEffect(() => {
     setStatus(audioStatus);
@@ -567,7 +582,9 @@ export default function App() {
           };
           setMessages(prev => [...prev, docMsg]);
           setShowBookRide(true);
-          if (text.includes('now') || text.includes('instantly')) {
+          
+          // Jump to provider selection or open app if provider is known and user confirms
+          if (text.includes('now') || text.includes('instantly') || text.includes('confirm')) {
             openRideApp(provider, coords);
           }
           return ` [Success: ${provider} to ${dest} initiated]`;
@@ -583,6 +600,7 @@ export default function App() {
       if (flightMatch) {
         const num = flightMatch[0].toUpperCase();
         setFlightNumber(num);
+        // Wise flight ownership detection
         const isMine = !text.includes('friend') && !text.includes('mom') && !text.includes('dad') && !text.includes('someone') && !text.includes('his') && !text.includes('her') && !text.includes('their');
         const status = await trackFlight(num, isMine);
         return ` [Autonomous Action: Tracking flight ${num}. Status: ${status.status}]`;
@@ -611,9 +629,10 @@ export default function App() {
     try {
       const { error } = await supabase.from('feedback').insert([{
         user_id: user.id,
-        username: user.email.split('@')[0],
+        username: user.user_metadata?.full_name || user.email.split('@')[0],
         email: user.email,
-        content: feedbackText
+        content: feedbackText,
+        created_at: new Date()
       }]);
       if (error) throw error;
       setFeedbackText('');
@@ -673,7 +692,9 @@ export default function App() {
         - Maintain a sophisticated, professional, yet approachable tone.
         - If in Dual mode, coordinate with the other agent to provide a comprehensive perspective.
         - Never repeat yourself or the other agent.
-        - Focus on "Real Actions" - if a user mentions a need, offer to use a tool or document it.`;
+        - Focus on "Real Actions" - if a user mentions a need, offer to use a tool or document it.
+        - You can trigger actions like "turn on dual conversation" or "book a ride" by including the command in your response.
+        - When a flight number is given, track it. If it belongs to someone else (friend, mom, etc.), monitor it but do not offer a ride booking unless asked. If it's the user's flight, offer ride booking and welcome them upon arrival.`;
       
       const { success, data: memories } = await searchMemory(userText);
       const memoryPrompt = success && memories?.length > 0 
@@ -727,6 +748,8 @@ export default function App() {
 
     // Voice command checks
     const lowerText = text.toLowerCase();
+    
+    // Command-based Dual Conversation Toggle
     if (lowerText.includes('turn on dual conversation')) {
       setIsDualMode(true);
       const resp = "Dual conversation is on.";
@@ -757,6 +780,7 @@ export default function App() {
         console.log('Dual mode active, getting responses from both agents...');
         setIsVoiceEnabled(true); // Voice must be on in Dual mode
         
+        // Sequential conversation for Dual Mode
         const respJenny = await getAIResponse(text, 'Jenny');
         const jennyMsg = { id: `jenny-${Date.now()}`, role: 'assistant', content: respJenny, personality: 'Jenny', timestamp: Date.now() };
         setMessages(prev => [...prev, jennyMsg]);
@@ -838,12 +862,28 @@ export default function App() {
 
   const handleNotificationClick = (n) => {
     setShowNotifications(false);
+    
+    // Mark as read
+    setNotifications(prev => prev.map(notif => notif.id === n.id ? { ...notif, isRead: true } : notif));
+
     if (n.payload?.sessionId) {
+      // Find the session in state or load it
       const session = sessions.find(s => s.id === n.payload.sessionId);
       if (session) {
         setMessages(session.messages);
         setCurrentSessionId(session.id);
         setCurrentSessionName(session.name);
+        setShowHistory(false);
+      } else {
+        // Fallback: load specific session if not in list
+        loadUserSessions(user.id).then(() => {
+          const reloaded = sessions.find(s => s.id === n.payload.sessionId);
+          if (reloaded) {
+            setMessages(reloaded.messages);
+            setCurrentSessionId(reloaded.id);
+            setCurrentSessionName(reloaded.name);
+          }
+        });
       }
     } else if (n.payload?.type?.includes('youtube')) { 
       setHistoryFilter('Files'); 
@@ -898,16 +938,6 @@ export default function App() {
     });
   };
 
-  // Guard: If not loading, not on landing/auth pages, but no user, force landing
-  useEffect(() => {
-    const isAuthPage = currentView === 'landing' || currentView === 'signin' || currentView === 'signup';
-    if (!isAuthLoading && !user && !isAuthPage) {
-      console.log('Access denied: No active session. Redirecting to landing.');
-      setCurrentView('landing');
-      localStorage.removeItem('currentView');
-    }
-  }, [user, currentView, isAuthLoading]);
-
   // Render Loading Page
   if (isAuthLoading) {
     return (
@@ -918,7 +948,24 @@ export default function App() {
     );
   }
 
+  // Guard: If not loading, not on landing/auth pages, but no user, force landing
+  const isAuthPage = currentView === 'landing' || currentView === 'signin' || currentView === 'signup';
+  if (!user && !isAuthPage) {
+    // This handles the "briefly displays" issue by ensuring we don't render protected views without a user
+    console.log('Access denied: No active session. Redirecting to landing.');
+    setCurrentView('landing');
+    return null; // Force re-render
+  }
+
   // Render Landing Page
+  const [authView, setAuthView] = useState(() => {
+    return localStorage.getItem('authView') || 'login';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('authView', authView);
+  }, [authView]);
+
   const handleLogin = async () => {
     if (!authEmail || !authPassword) {
       alert('Please fill in all fields.');
@@ -1132,9 +1179,12 @@ export default function App() {
             {notifications.some(n => !n.isRead) && <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full border-2 border-white dark:border-navy-900 text-[8px] flex items-center justify-center text-white font-bold">{notifications.filter(n => !n.isRead).length}</span>}
           </div>
           <button onClick={() => setIsDualMode(!isDualMode)} className={`p-2 rounded-xl transition-all ${isDualMode ? 'bg-purple-600 text-white' : 'text-slate-400'}`}><Layers size={20} /></button>
-          <button onClick={() => setPersonality(p => p === 'Jenny' ? 'Gabby' : 'Jenny')} className={`text-xs font-black uppercase tracking-widest ${personality === 'Jenny' ? 'text-blue-500' : 'text-pink-500'}`}>
-            {isDualMode ? 'Dual' : personality}
-          </button>
+          <div className="flex flex-col items-end">
+            <button onClick={() => setPersonality(p => p === 'Jenny' ? 'Gabby' : 'Jenny')} className={`text-xs font-black uppercase tracking-widest ${personality === 'Jenny' ? 'text-blue-500' : 'text-pink-500'}`}>
+              {isDualMode ? 'Dual' : personality}
+            </button>
+            <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">Active</span>
+          </div>
         </div>
       </header>
 
@@ -1337,9 +1387,9 @@ export default function App() {
                         OneSignal.showNativePrompt();
                       });
                     }} 
-                    className="px-4 py-2 bg-blue-600 text-white text-[10px] font-black uppercase rounded-xl hover:bg-blue-700 transition-all"
+                    className="px-4 py-2 bg-emerald-600 text-white text-[10px] font-black uppercase rounded-xl hover:bg-emerald-700 transition-all"
                   >
-                    Enable
+                    Enabled
                   </button>
                 </div>
               </section>
@@ -1683,9 +1733,9 @@ export default function App() {
                 Cancel
               </button>
               <button 
-                onClick={() => {
+                onClick={async () => {
                   if (newContactName && newContactEmail.includes('@')) {
-                    setEmergencyContacts([...emergencyContacts, { name: newContactName, email: newContactEmail }]);
+                    await addEmergencyContact(newContactName, newContactEmail);
                     setShowAddContactModal(false);
                     setNewContactName('');
                     setNewContactEmail('');

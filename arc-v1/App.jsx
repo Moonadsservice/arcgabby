@@ -69,13 +69,28 @@ export default function App() {
   const [showQuickTools, setShowQuickTools] = useState(false);
   const [activeFlightStep, setActiveFlightStep] = useState(null); // 'contacts_choice', 'contact_name', 'book_ride_ask'
   const [wantsArrivalRide, setWantsArrivalRide] = useState(false);
-  const [currentView, setCurrentView] = useState('landing');
+  const [currentView, setCurrentView] = useState(() => {
+    return localStorage.getItem('currentView') || 'landing';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('currentView', currentView);
+  }, [currentView]);
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authName, setAuthName] = useState('');
   const [historyFilter, setHistoryFilter] = useState('All');
   const [activeTool, setActiveTool] = useState(null);
-  const [weatherData, setWeatherData] = useState(null);
+  const [weatherData, setWeatherData] = useState(() => {
+    const saved = localStorage.getItem('weatherData');
+    return saved ? JSON.parse(saved) : null;
+  });
+
+  useEffect(() => {
+    if (weatherData) {
+      localStorage.setItem('weatherData', JSON.stringify(weatherData));
+    }
+  }, [weatherData]);
   const [sessions, setSessions] = useState(() => {
     const saved = localStorage.getItem('sessions');
     return saved ? JSON.parse(saved) : [];
@@ -663,21 +678,6 @@ export default function App() {
     }
   };
 
-  const toggleSession = () => {
-    const nextActive = !isSessionActive;
-    setIsSessionActive(nextActive);
-    isSessionActiveRef.current = nextActive;
-    if (nextActive) {
-      startListening();
-    } else {
-      stopListening();
-      if (currentTranscription.trim()) {
-        handleSendMessage(currentTranscription);
-        setCurrentTranscription('');
-      }
-    }
-  };
-
   const sendNotification = (title, message, payload = {}) => {
     const newNotification = {
       id: Date.now().toString(),
@@ -715,25 +715,12 @@ export default function App() {
         } catch (err) {
           console.error('Error syncing session to Supabase:', err);
         }
-      } else {
-        localStorage.setItem('sessions', JSON.stringify(sessions));
-        localStorage.setItem('currentMessages', JSON.stringify(messages));
       }
     };
 
     const timeoutId = setTimeout(syncSession, 1000); // Faster sync
     return () => clearTimeout(timeoutId);
   }, [messages, currentSessionId, currentSessionName, user]);
-
-  // Auto-scroll to bottom
-  useEffect(() => {
-    if (scrollViewRef.current) {
-      scrollViewRef.current.scrollTo({
-        top: scrollViewRef.current.scrollHeight,
-        behavior: 'smooth'
-      });
-    }
-  }, [messages, currentTranscription]);
 
   const handleNotificationClick = (n) => {
     setShowNotifications(false);
@@ -798,7 +785,13 @@ export default function App() {
   };
 
   // Render Landing Page
-  const [authView, setAuthView] = useState('login'); // 'login', 'signup', 'forgot_password'
+  const [authView, setAuthView] = useState(() => {
+    return localStorage.getItem('authView') || 'login';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('authView', authView);
+  }, [authView]);
 
   const handleLogin = async () => {
     if (!authEmail || !authPassword) {
@@ -1027,7 +1020,19 @@ export default function App() {
             <div className="bg-slate-900/90 p-2 rounded-3xl flex flex-col space-y-2 animate-in fade-in zoom-in">
               <button onClick={() => { setShowBookRide(true); setShowQuickTools(false); }} className="p-3 bg-white/10 rounded-full text-blue-500" title="Book Ride"><Car size={20} /></button>
               <button onClick={() => { setShowFlightTracker(true); setShowQuickTools(false); }} className="p-3 bg-white/10 rounded-full text-emerald-500" title="Flight Tracker"><Plane size={20} /></button>
-              <button onClick={() => { setActiveTool('Weather'); setShowQuickTools(false); }} className="p-3 bg-white/10 rounded-full text-yellow-500" title="Weather"><CloudSun size={20} /></button>
+              <button onClick={() => { 
+                if (!weatherData) {
+                  // Trigger weather check for default location if none exists
+                  const defaultLoc = 'London';
+                  setStatus(`Checking weather for ${defaultLoc}...`);
+                  fetchWeather(defaultLoc).then(res => {
+                    if (res.success) setWeatherData(res.data);
+                    setStatus('Ready');
+                  });
+                }
+                setActiveTool('Weather'); 
+                setShowQuickTools(false); 
+              }} className="p-3 bg-white/10 rounded-full text-yellow-500" title="Weather"><CloudSun size={20} /></button>
             </div>
           )}
           <button onClick={() => setShowQuickTools(!showQuickTools)} className="p-4 bg-slate-800 text-white rounded-full shadow-xl"><LayoutGrid /></button>

@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "build": "cd arc-v1 && npm install && npm run build:web",
+    "build": "cd arc-v1 && npm install && npm run build",
     "install": "cd arc-v1 && npm install"
   }
 }

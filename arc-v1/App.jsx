@@ -38,13 +38,15 @@ import {
 } from 'lucide-react';
 import { saveMemory, searchMemory, saveUserEmail, supabase } from './src/utils/supabase';
 import { useDeepgramAudio } from './src/hooks/useDeepgramAudio';
-import { getOpenRouterResponse } from './src/utils/ai';
+import { getAIResponse as fetchAIResponse } from './src/utils/ai';
 import { sendEmail } from './src/utils/email';
 import { fetchWeather } from './src/utils/weather';
+import { fetchFlightStatus } from './src/utils/aviation';
 
 // Environment variables for Vite
 const DEEPGRAM_API_KEY = import.meta.env.VITE_DEEPGRAM_API_KEY;
 const ONESIGNAL_APP_ID = import.meta.env.VITE_ONESIGNAL_APP_ID;
+const AVIATIONSTACK_API_KEY = import.meta.env.VITE_AVIATIONSTACK_API_KEY;
 
 export default function App() {
   const [isDarkMode, setIsDarkMode] = useState(() => {
@@ -125,7 +127,13 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('notificationToggles', JSON.stringify(notificationToggles));
   }, [notificationToggles]);
-  const [emergencyContacts, setEmergencyContacts] = useState([]);
+  const [emergencyContacts, setEmergencyContacts] = useState(() => {
+    return safeJsonParse(localStorage.getItem('emergencyContacts'), []);
+  });
+
+  useEffect(() => {
+    localStorage.setItem('emergencyContacts', JSON.stringify(emergencyContacts));
+  }, [emergencyContacts]);
   const [showRideProviderModal, setShowRideProviderModal] = useState(false);
   const [selectedRideProvider, setSelectedRideProvider] = useState(null); // 'uber' or 'bolt'
   const [flightMonitoring, setFlightMonitoring] = useState({
@@ -648,33 +656,49 @@ export default function App() {
 
   const trackFlight = async (num, isMine = true) => {
     setStatus('Tracking Flight...');
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        const mockStatus = {
+    try {
+      const res = await fetchFlightStatus(num);
+      let flightData;
+      
+      if (res.success) {
+        flightData = {
+          active: true,
+          ...res.data,
+          isMine
+        };
+      } else {
+        // Fallback to mock if API fails or not configured
+        flightData = {
           active: true,
           number: num,
-          status: 'On Time',
-          departure: '10:30 AM',
-          arrival: '2:45 PM',
+          status: 'Scheduled',
+          departure: 'N/A',
+          arrival: 'N/A',
           lastUpdate: new Date().toLocaleTimeString(),
           isMine
         };
-        setFlightMonitoring(mockStatus);
-        
-        const aiResponse = isMine 
-          ? `I've started monitoring your flight ${num}. It's currently ${mockStatus.status}. I'll welcome you upon arrival!`
-          : `I've started monitoring flight ${num} for your contact. I'll keep you updated.`;
+      }
 
-        setMessages(prev => [...prev, { id: `msg-flight-${Date.now()}`, role: 'assistant', content: aiResponse, timestamp: Date.now() }]);
-        speak(aiResponse, personality);
-        setStatus('Ready');
-        
-        if (isMine) {
-          setTimeout(() => handleFlightArrival(num), 30000);
-        }
-        resolve(mockStatus);
-      }, 1500);
-    });
+      setFlightMonitoring(flightData);
+      
+      const aiResponse = isMine 
+        ? `I've started monitoring your flight ${num}. It's currently ${flightData.status}. I'll welcome you upon arrival!`
+        : `I've started monitoring flight ${num} for your contact. I'll keep you updated.`;
+
+      setMessages(prev => [...prev, { id: `msg-flight-${Date.now()}`, role: 'assistant', content: aiResponse, timestamp: Date.now() }]);
+      speak(aiResponse, personality);
+      setStatus('Ready');
+      
+      if (isMine) {
+        // Simulation: check arrival in 30 seconds
+        setTimeout(() => handleFlightArrival(num), 30000);
+      }
+      return flightData;
+    } catch (err) {
+      console.error('Track Flight Error:', err);
+      setStatus('Error');
+      return null;
+    }
   };
 
   const getAIResponse = async (userText, overridePersonality = null) => {
@@ -711,7 +735,7 @@ export default function App() {
         { role: 'user', content: userText }
       ];
 
-      const aiText = await getOpenRouterResponse(apiMessages);
+      const aiText = await fetchAIResponse(apiMessages);
       const taskResult = await executeBackgroundTask(userText, aiText);
       
       setIsProcessing(false);
@@ -1371,26 +1395,16 @@ export default function App() {
                 <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-navy-900/50 rounded-2xl">
                   <div className="flex items-center space-x-3"><Mail className="text-blue-500" size={20} /><span className="font-bold dark:text-white">Notify Me with Email</span></div>
                   <button onClick={() => {
-                    if (!userEmail) {
+                    const nextVal = !notificationToggles.meEmail;
+                    setNotificationToggles({ ...notificationToggles, meEmail: nextVal });
+                    if (nextVal && !userEmail && user?.email) {
+                      setUserEmail(user.email);
+                      localStorage.setItem('userEmail', user.email);
+                      saveUserEmail(user.email);
+                    } else if (nextVal && !userEmail) {
                       setShowEmailPopup(true);
-                      return;
                     }
-                    setNotificationToggles({ ...notificationToggles, meEmail: !notificationToggles.meEmail });
                   }} className={`w-12 h-6 rounded-full transition-all relative ${notificationToggles.meEmail ? 'bg-blue-600' : 'bg-slate-300'}`}><span className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${notificationToggles.meEmail ? 'right-1' : 'left-1'}`} /></button>
-                </div>
-                <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-navy-900/50 rounded-2xl">
-                  <div className="flex items-center space-x-3"><Bell className="text-blue-500" size={20} /><span className="font-bold dark:text-white">Push Notifications</span></div>
-                  <button 
-                    onClick={() => {
-                      const OneSignal = window.OneSignal || [];
-                      OneSignal.push(() => {
-                        OneSignal.showNativePrompt();
-                      });
-                    }} 
-                    className="px-4 py-2 bg-emerald-600 text-white text-[10px] font-black uppercase rounded-xl hover:bg-emerald-700 transition-all"
-                  >
-                    Enabled
-                  </button>
                 </div>
               </section>
 

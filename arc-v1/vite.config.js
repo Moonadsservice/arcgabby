@@ -7,7 +7,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['assets/images/logo.svg'],
+      includeAssets: ['assets/images/logo.svg', 'assets/images/icon.png', 'assets/images/favicon.png'],
       manifest: {
         name: 'ARC - Autonomous Reasoning Companion',
         short_name: 'ARC',
@@ -17,19 +17,19 @@ export default defineConfig({
         display: 'standalone',
         icons: [
           {
-            src: 'assets/images/logo.svg',
+            src: 'assets/images/icon.png',
             sizes: '192x192',
-            type: 'image/svg+xml'
+            type: 'image/png'
           },
           {
-            src: 'assets/images/logo.svg',
+            src: 'assets/images/icon.png',
             sizes: '512x512',
-            type: 'image/svg+xml'
+            type: 'image/png'
           },
           {
-            src: 'assets/images/logo.svg',
+            src: 'assets/images/splash-icon.png',
             sizes: '512x512',
-            type: 'image/svg+xml',
+            type: 'image/png',
             purpose: 'any maskable'
           }
         ]

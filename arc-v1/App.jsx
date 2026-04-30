@@ -190,29 +190,46 @@ export default function App() {
   // Supabase Auth Listener
   useEffect(() => {
     console.log('Initializing Auth Listener...');
-    supabase?.auth.getSession().then(({ data: { session } }) => {
-      console.log('Initial session check:', session ? 'User logged in' : 'No session');
+    
+    const handleAuthChange = (event, session) => {
+      console.log('Auth transition:', event, session ? 'Authenticated' : 'Unauthenticated');
+      
       if (session?.user) {
         setUser(session.user);
         setUserEmail(session.user.email);
         loadUserSessions(session.user.id);
+      } else {
+        // Clear authenticated state
+        setUser(null);
+        setUserEmail('');
+        setActiveTool(null); // Fix: Clear tools on logout
+        setShowQuickTools(false);
+        setShowHistory(false);
+        setShowSettings(false);
+        
+        // Only redirect if we are in a protected view
+        // Using a functional check to avoid stale closure issues if needed, 
+        // but currentView is in dependencies or we check localStorage
+        const savedView = localStorage.getItem('currentView') || 'landing';
+        const protectedViews = ['chat', 'settings', 'history']; // Add any other protected view names
+        
+        if (protectedViews.includes(savedView) || (event === 'SIGNED_OUT')) {
+          console.log('Redirecting to landing due to session loss or sign out');
+          setCurrentView('landing');
+          localStorage.removeItem('currentView');
+        }
       }
       setIsAuthLoading(false);
+    };
+
+    // Initial session check
+    supabase?.auth.getSession().then(({ data: { session } }) => {
+      handleAuthChange('INITIAL_SESSION', session);
     });
 
+    // Listen for auth changes
     const { data: { subscription } } = supabase?.auth.onAuthStateChange((event, session) => {
-      console.log('Auth state change event:', event, session ? 'Session exists' : 'No session');
-      setUser(session?.user ?? null);
-      if (session?.user) {
-        setUserEmail(session.user.email);
-        loadUserSessions(session.user.id);
-      } else if (event === 'SIGNED_OUT') {
-        console.log('User signed out, redirecting to landing...');
-        setUserEmail('');
-        setCurrentView('landing');
-        localStorage.removeItem('currentView');
-      }
-      setIsAuthLoading(false);
+      handleAuthChange(event, session);
     });
 
     return () => {
@@ -866,6 +883,7 @@ export default function App() {
     });
   };
 
+  // Render Loading Page
   if (isAuthLoading) {
     return (
       <div className="h-screen w-full flex flex-col items-center justify-center bg-white dark:bg-navy-900">
@@ -873,6 +891,15 @@ export default function App() {
         <p className="text-slate-500 font-bold uppercase tracking-widest animate-pulse">Initializing ARC...</p>
       </div>
     );
+  }
+
+  // Guard: If not loading, not on landing/auth pages, but no user, force landing
+  const isAuthPage = currentView === 'landing' || currentView === 'signin' || currentView === 'signup';
+  if (!user && !isAuthPage) {
+    // This handles the "briefly displays" issue by ensuring we don't render protected views without a user
+    console.log('Access denied: No active session. Redirecting to landing.');
+    setCurrentView('landing');
+    return null; // Force re-render
   }
 
   // Render Landing Page

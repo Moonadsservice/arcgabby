@@ -46,18 +46,28 @@ import { fetchWeather } from './src/utils/weather';
 const DEEPGRAM_API_KEY = import.meta.env.VITE_DEEPGRAM_API_KEY;
 const ONESIGNAL_APP_ID = import.meta.env.VITE_ONESIGNAL_APP_ID;
 
+// Helper for safe JSON parsing
+const safeJsonParse = (str, fallback) => {
+  try {
+    return str ? JSON.parse(str) : fallback;
+  } catch (e) {
+    console.error('Error parsing JSON from localStorage:', e);
+    return fallback;
+  }
+};
+
 export default function App() {
   const [isDarkMode, setIsDarkMode] = useState(() => {
     const saved = localStorage.getItem('darkMode');
-    return saved ? JSON.parse(saved) : window.matchMedia('(prefers-color-scheme: dark)').matches;
+    if (saved === null) return window.matchMedia('(prefers-color-scheme: dark)').matches;
+    return safeJsonParse(saved, window.matchMedia('(prefers-color-scheme: dark)').matches);
   });
 
   const [status, setStatus] = useState('Ready');
   const [isSessionActive, setIsSessionActive] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [messages, setMessages] = useState(() => {
-    const saved = localStorage.getItem('currentMessages');
-    return saved ? JSON.parse(saved) : [];
+    return safeJsonParse(localStorage.getItem('currentMessages'), []);
   });
   const [tasks, setTasks] = useState([]);
   const [currentTranscription, setCurrentTranscription] = useState('');
@@ -84,8 +94,7 @@ export default function App() {
   const [weatherSearchQuery, setWeatherSearchQuery] = useState('');
   const [isWeatherSearching, setIsWeatherSearching] = useState(false);
   const [weatherData, setWeatherData] = useState(() => {
-    const saved = localStorage.getItem('weatherData');
-    return saved ? JSON.parse(saved) : null;
+    return safeJsonParse(localStorage.getItem('weatherData'), null);
   });
 
   useEffect(() => {
@@ -94,8 +103,7 @@ export default function App() {
     }
   }, [weatherData]);
   const [sessions, setSessions] = useState(() => {
-    const saved = localStorage.getItem('sessions');
-    return saved ? JSON.parse(saved) : [];
+    return safeJsonParse(localStorage.getItem('sessions'), []);
   });
   const [currentSessionId, setCurrentSessionId] = useState(Date.now().toString());
   const [currentSessionName, setCurrentSessionName] = useState('New Session');
@@ -112,14 +120,13 @@ export default function App() {
   const [showFlightTracker, setShowFlightTracker] = useState(false);
   const [flightNumber, setFlightNumber] = useState('');
   const [notificationToggles, setNotificationToggles] = useState(() => {
-    const saved = localStorage.getItem('notificationToggles');
-    return saved ? JSON.parse(saved) : {
+    return safeJsonParse(localStorage.getItem('notificationToggles'), {
       emergencyEmail: false,
       meEmail: false,
       call: false,
       sms: false,
       whatsapp: false
-    };
+    });
   });
 
   useEffect(() => {
@@ -169,6 +176,14 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
+
+  const [authView, setAuthView] = useState(() => {
+    return localStorage.getItem('authView') || 'login';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('authView', authView);
+  }, [authView]);
 
   // Initialize Audio Hook
   const { isListening, status: audioStatus, startListening, stopListening, speak } = useDeepgramAudio(
@@ -883,6 +898,16 @@ export default function App() {
     });
   };
 
+  // Guard: If not loading, not on landing/auth pages, but no user, force landing
+  useEffect(() => {
+    const isAuthPage = currentView === 'landing' || currentView === 'signin' || currentView === 'signup';
+    if (!isAuthLoading && !user && !isAuthPage) {
+      console.log('Access denied: No active session. Redirecting to landing.');
+      setCurrentView('landing');
+      localStorage.removeItem('currentView');
+    }
+  }, [user, currentView, isAuthLoading]);
+
   // Render Loading Page
   if (isAuthLoading) {
     return (
@@ -893,24 +918,7 @@ export default function App() {
     );
   }
 
-  // Guard: If not loading, not on landing/auth pages, but no user, force landing
-  const isAuthPage = currentView === 'landing' || currentView === 'signin' || currentView === 'signup';
-  if (!user && !isAuthPage) {
-    // This handles the "briefly displays" issue by ensuring we don't render protected views without a user
-    console.log('Access denied: No active session. Redirecting to landing.');
-    setCurrentView('landing');
-    return null; // Force re-render
-  }
-
   // Render Landing Page
-  const [authView, setAuthView] = useState(() => {
-    return localStorage.getItem('authView') || 'login';
-  });
-
-  useEffect(() => {
-    localStorage.setItem('authView', authView);
-  }, [authView]);
-
   const handleLogin = async () => {
     if (!authEmail || !authPassword) {
       alert('Please fill in all fields.');

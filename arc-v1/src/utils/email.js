@@ -61,7 +61,7 @@ export const sendEmail = async ({ to, subject, html, userId }) => {
     while (attempt <= MAX_RETRIES && !success) {
       try {
         const payload = {
-          from: 'ARC Assistant <notifications@resend.dev>',
+          from: 'ARC - Autonomous Reasoning Companion <notifications@resend.dev>',
           to: [recipient],
           subject,
           html,

@@ -374,6 +374,28 @@ export default function App() {
     }
   };
 
+  const saveSessionToSupabase = async (session) => {
+    if (!user || !supabase) return;
+    try {
+      const { error } = await supabase
+        .from('files')
+        .upsert([{
+          user_id: user.id,
+          type: 'session',
+          metadata: {
+            id: session.id,
+            name: session.name,
+            timestamp: session.timestamp
+          },
+          content: session.messages,
+          created_at: new Date(session.timestamp).toISOString()
+        }], { onConflict: 'user_id,type,metadata->>id' });
+      if (error) throw error;
+    } catch (err) {
+      console.error('Failed to save session to Supabase:', err);
+    }
+  };
+
   // OneSignal Initialization
   useEffect(() => {
     if (ONESIGNAL_APP_ID && !ONESIGNAL_APP_ID.startsWith('YOUR_')) {
@@ -870,7 +892,7 @@ export default function App() {
         
         Guidelines:
         - Be concise, helpful, and natural. Speak like a friend.
-        - NEVER say "I am your premium..." or anything similar.
+        - NEVER mention "premium", "subscription", "paid", "upgrade", or anything related to pricing or payment.
         - Use your tools (weather, flight tracking, ride booking) proactively when relevant.
         - If in Dual mode, you, the user, and the other agent are conversing as friends.
         - Anyone can go first or respond naturally. You can be called by name (e.g., "Jenny, what do you think?").
@@ -1091,6 +1113,11 @@ export default function App() {
     
     // Remove notification on click as requested ("should get lost")
     setNotifications(prev => prev.filter(notif => notif.id !== n.id));
+
+    if (n.payload?.filePath) {
+      // Open the file or folder
+      window.open(n.payload.filePath, '_blank');
+    }
 
     if (n.payload?.sessionId) {
       // Find the session in state or load it

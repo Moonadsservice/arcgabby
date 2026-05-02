@@ -36,7 +36,7 @@ import {
   Trash2,
   Save
 } from 'lucide-react';
-import { supabase } from './src/utils/supabase';
+import { saveMemory, searchMemory, saveUserEmail, supabase } from './src/utils/supabase';
 import { useDeepgramAudio } from './src/hooks/useDeepgramAudio';
 import { getAIResponse as fetchAIResponse } from './src/utils/ai';
 import { sendEmail } from './src/utils/email';
@@ -61,8 +61,7 @@ const safeJsonParse = (str, fallback) => {
 export default function App() {
   const [isDarkMode, setIsDarkMode] = useState(() => {
     const saved = localStorage.getItem('darkMode');
-    const prefersDark = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-    return safeJsonParse(saved, prefersDark);
+    return safeJsonParse(saved, true); // Dark mode by default as requested
   });
 
   const isSessionActiveRef = useRef(false);
@@ -225,6 +224,12 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [isAuthPage, setIsAuthPage] = useState(true);
+
+  useEffect(() => {
+    const isAuth = currentView === 'landing' || currentView === 'signin' || currentView === 'signup';
+    setIsAuthPage(isAuth);
+  }, [currentView]);
 
   // Load emergency contacts from Supabase
   useEffect(() => {
@@ -284,34 +289,43 @@ export default function App() {
         setUser(session.user);
         setUserEmail(session.user.email);
         loadUserSessions(session.user.id);
+        // Only switch view if we are on landing or auth pages
+        if (currentView === 'landing' || currentView === 'signin' || currentView === 'signup') {
+          setCurrentView('chat');
+        }
       } else {
         // Clear authenticated state
         setUser(null);
         setUserEmail('');
-        setActiveTool(null); // Fix: Clear tools on logout
+        setActiveTool(null); 
         setShowQuickTools(false);
         setShowHistory(false);
         setShowSettings(false);
         
-        // Only redirect if we are in a protected view
-        // Using a functional check to avoid stale closure issues if needed, 
-        // but currentView is in dependencies or we check localStorage
-        const savedView = localStorage.getItem('currentView') || 'landing';
-        const protectedViews = ['chat', 'settings', 'history']; // Add any other protected view names
-        
-        if (protectedViews.includes(savedView) || (event === 'SIGNED_OUT')) {
-          console.log('Redirecting to landing due to session loss or sign out');
+        if (event === 'SIGNED_OUT') {
+          console.log('User signed out, redirecting to landing');
           setCurrentView('landing');
-          localStorage.removeItem('currentView');
         }
       }
       setIsAuthLoading(false);
     };
 
     // Initial session check
-    supabase?.auth.getSession().then(({ data: { session } }) => {
-      handleAuthChange('INITIAL_SESSION', session);
-    });
+    const checkInitialSession = async () => {
+      try {
+        if (!supabase) {
+          setIsAuthLoading(false);
+          return;
+        }
+        const { data: { session } } = await supabase.auth.getSession();
+        handleAuthChange('INITIAL_SESSION', session);
+      } catch (err) {
+        console.error('Initial session check failed:', err);
+        setIsAuthLoading(false);
+      }
+    };
+
+    checkInitialSession();
 
     // Listen for auth changes
     const authListener = supabase?.auth.onAuthStateChange((event, session) => {
@@ -655,6 +669,54 @@ export default function App() {
     if (text.includes('switch to jenny')) { setPersonality('Jenny'); return " [Switched to Jenny]"; }
     
     // Agentic tool triggers
+    if (text.includes('notify emergency') || text.includes('contact update') || text.includes('emergency update')) {
+      if (emergencyContacts.length > 0) {
+        const recipients = emergencyContacts.map(c => c.email);
+        const subject = `ARC Emergency Update: ${user?.user_metadata?.full_name || 'User'}`;
+        const html = `
+          <div style="font-family: sans-serif; border: 1px solid #ef4444; padding: 20px; border-radius: 10px;">
+            <h2 style="color: #ef4444;">ARC Emergency Alert</h2>
+            <p>This is an autonomous update sent on behalf of <strong>${user?.user_metadata?.full_name || user?.email}</strong> to their emergency contacts.</p>
+            <div style="background: #fef2f2; padding: 15px; border-radius: 8px; margin: 10px 0; border-left: 4px solid #ef4444;">
+              ${aiResponse}
+            </div>
+            <p style="font-size: 12px; color: #64748b;">ARC is monitoring the situation and keeping you informed.</p>
+            <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+            <p style="font-size: 10px; text-align: center; color: #94a3b8;">Experience the future of reasoning with ARC.</p>
+          </div>
+        `;
+        
+        await sendEmail({ to: recipients, subject, html, userId: user.id });
+        return ` [Autonomous Action: Emergency contacts notified]`;
+      }
+      return " [Error: No emergency contacts found]";
+    }
+
+    if (text.includes('send email') || text.includes('forward to email') || text.includes('email update')) {
+      const emailMatch = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+      const recipient = emailMatch ? emailMatch[0] : (userEmail || user?.email);
+      
+      if (recipient) {
+        const subject = `ARC Autonomous Update: ${user?.user_metadata?.full_name || 'User'}`;
+        const html = `
+          <div style="font-family: sans-serif; border: 1px solid #eee; padding: 20px; border-radius: 10px;">
+            <h2 style="color: #2563eb;">Autonomous Reasoning Companion (ARC)</h2>
+            <p>Hello, this is an automated update sent on behalf of <strong>${user?.user_metadata?.full_name || user?.email}</strong>.</p>
+            <div style="background: #f8fafc; padding: 15px; border-radius: 8px; margin: 10px 0;">
+              ${aiResponse}
+            </div>
+            <p style="font-size: 12px; color: #64748b;">This message was generated autonomously by ARC to keep you informed.</p>
+            <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+            <p style="font-size: 10px; text-align: center; color: #94a3b8;">Experience the future of reasoning with ARC.</p>
+          </div>
+        `;
+        
+        await sendEmail({ to: recipient, subject, html, userId: user.id });
+        return ` [Autonomous Action: Email update sent to ${recipient}]`;
+      }
+      return " [Error: No recipient email found]";
+    }
+
     if (text.includes('book a ride') || text.includes('uber') || text.includes('bolt')) {
       const provider = text.includes('bolt') ? 'bolt' : 'uber';
       const destinationMatch = text.match(/(?:to|at|in)\s+([a-zA-Z\s,]+)(?:\s|$)/);
@@ -713,11 +775,27 @@ export default function App() {
     return "";
   };
 
-  const handleFeedbackSubmit = () => {
-    if (!feedbackText.trim()) return;
-    setFeedbackText('');
-    setShowFeedback(false);
-    alert('Feedback sent! Thank you.');
+  const handleFeedbackSubmit = async () => {
+    if (!feedbackText.trim() || !user || !supabase) return;
+    setStatus('Sending...');
+    try {
+      const { error } = await supabase.from('feedback').insert([{
+        user_id: user.id,
+        username: user.user_metadata?.full_name || user.email.split('@')[0],
+        email: user.email,
+        content: feedbackText,
+        created_at: new Date()
+      }]);
+      if (error) throw error;
+      setFeedbackText('');
+      setShowFeedback(false);
+      setStatus('Ready');
+      alert('Feedback sent! Thank you.');
+    } catch (err) {
+      console.error('Feedback Error:', err);
+      alert('Failed to send feedback.');
+      setStatus('Ready');
+    }
   };
 
   const trackFlight = async (num, isMine = true) => {
@@ -778,19 +856,32 @@ export default function App() {
     
     try {
       const activePersonality = personalityToUse;
-      const systemContext = `You are ${activePersonality}, a premium autonomous reasoning companion (ARC).
+      const systemContext = `You are ${activePersonality}, an autonomous reasoning companion (ARC).
+        You are highly intelligent, proactive, and friendly.
+        Current mode: ${isDualMode ? 'Dual Conversation' : 'Single mode'}.
+        Characters: Jenny (Technical, Efficient) and Gabby (Friendly, Creative).
+        
         Guidelines:
-        - Be concise but extremely helpful.
+        - Be concise, helpful, and natural. Speak like a friend.
+        - NEVER say "I am your premium..." or anything similar.
         - Use your tools (weather, flight tracking, ride booking) proactively when relevant.
+        - If in Dual mode, you, the user, and the other agent are conversing as friends.
+        - Anyone can go first or respond naturally. You can be called by name (e.g., "Jenny, what do you think?").
+        - You can autonomously write and send emails if requested or needed for updates.
+        - When sending emails, include "ARC" or "Autonomous Reasoning Companion" to help promote us!
         - You must support real-time three-way conversations between the user, Gabby, and Jenny only—no additional entities.`;
       
+      const { success, data: memories } = await searchMemory(userText);
+      const memoryPrompt = success && memories?.length > 0 
+        ? "\nRelevant context from memory: " + memories.map(m => m.content).join(' ') : "";
+
       const historyMessages = messages.slice(-5).map(m => ({
         role: m.role,
         content: m.content
       }));
 
       const apiMessages = [
-        { role: 'system', content: systemContext },
+        { role: 'system', content: systemContext + memoryPrompt },
         ...historyMessages,
         { role: 'user', content: userText }
       ];
@@ -816,7 +907,10 @@ export default function App() {
     const text = textOverride || inputText;
     if (!text.trim() || isProcessing) return;
 
-    console.log('Sending message:', text);
+    if (!user) {
+      console.warn('Cannot send message: No user session.');
+      return;
+    }
 
     const wasListening = isSessionActive;
     if (wasListening) {
@@ -871,7 +965,8 @@ export default function App() {
           setMessages(prev => [...prev, assistantMsg]);
           await speak(aiText, 'Gabby');
         } else {
-          // Broadcast to both or neither mentioned explicitly
+          // Three-way friendly conversation: Anyone can go first
+          console.log('Three-way conversation active...');
           const jennyPromise = handleGetAIResponse(text, 'Jenny');
           const gabbyPromise = handleGetAIResponse(text, 'Gabby');
           
@@ -921,6 +1016,13 @@ export default function App() {
     setNotifications(prev => [newNotification, ...prev]);
   };
 
+  // Auto-scroll to bottom
+  useEffect(() => {
+    if (scrollViewRef.current) {
+      scrollViewRef.current.scrollTop = scrollViewRef.current.scrollHeight;
+    }
+  }, [messages, currentTranscription]);
+
   // Local session update
   useEffect(() => {
     if (messages.length > 0) {
@@ -938,11 +1040,42 @@ export default function App() {
     }
   }, [messages, currentSessionId, currentSessionName]);
 
+  // Sync sessions with Supabase
+  useEffect(() => {
+    const syncSession = async () => {
+      if (user && messages.length > 0 && supabase) {
+        try {
+          const { error } = await supabase
+            .from('files')
+            .upsert({
+              id: currentSessionId,
+              user_id: user.id,
+              type: 'session',
+              content: messages,
+              metadata: { 
+                name: currentSessionName, 
+                timestamp: Date.now(),
+                user_email: user.email 
+              }
+            }, { onConflict: 'id' });
+          
+          if (error) throw error;
+          console.log('Session synced to Supabase successfully.');
+        } catch (err) {
+          console.error('Error syncing session to Supabase:', err);
+        }
+      }
+    };
+
+    const timeoutId = setTimeout(syncSession, 1000); // Faster sync
+    return () => clearTimeout(timeoutId);
+  }, [messages, currentSessionId, currentSessionName, user]);
+
   const handleNotificationClick = (n) => {
     setShowNotifications(false);
     
-    // Mark as read
-    setNotifications(prev => prev.map(notif => notif.id === n.id ? { ...notif, isRead: true } : notif));
+    // Remove notification on click as requested ("should get lost")
+    setNotifications(prev => prev.filter(notif => notif.id !== n.id));
 
     if (n.payload?.sessionId) {
       // Find the session in state or load it
@@ -1027,12 +1160,10 @@ export default function App() {
   }
 
   // Guard: If not loading, not on landing/auth pages, but no user, force landing
-  const isAuthPage = currentView === 'landing' || currentView === 'signin' || currentView === 'signup';
   if (!user && !isAuthPage) {
-    // This handles the "briefly displays" issue by ensuring we don't render protected views without a user
     console.log('Access denied: No active session. Redirecting to landing.');
     setCurrentView('landing');
-    return null; // Force re-render
+    return null;
   }
 
   // Render Landing Page
@@ -1262,8 +1393,8 @@ export default function App() {
           </div>
           <button onClick={() => setIsDualMode(!isDualMode)} className={`p-2 rounded-xl transition-all ${isDualMode ? 'bg-purple-600 text-white' : 'text-slate-400'}`}><Layers size={20} /></button>
           <div className="flex flex-col items-end">
-            <button onClick={() => setPersonality(p => p === 'Jenny' ? 'Gabby' : 'Jenny')} className={`text-xs font-black uppercase tracking-widest ${personality === 'Jenny' ? 'text-blue-500' : 'text-pink-500'}`}>
-              {isDualMode ? 'Dual' : personality}
+            <button onClick={() => setPersonality(p => p === 'Jenny' ? 'Gabby' : 'Jenny')} className={`text-xs font-black uppercase tracking-widest ${isDualMode ? 'text-emerald-500' : (personality === 'Jenny' ? 'text-blue-500' : 'text-pink-500')}`}>
+              {isDualMode ? 'Friends (Jenny & Gabby)' : personality}
             </button>
             <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">Active</span>
           </div>
@@ -1490,6 +1621,7 @@ export default function App() {
                     if (nextVal && !userEmail && user?.email) {
                       setUserEmail(user.email);
                       localStorage.setItem('userEmail', user.email);
+                      saveUserEmail(user.email);
                     } else if (nextVal && !userEmail) {
                       setShowEmailPopup(true);
                     }
@@ -1777,6 +1909,7 @@ export default function App() {
                 onClick={async () => {
                   if (userEmail.includes('@')) {
                     localStorage.setItem('userEmail', userEmail);
+                    await saveUserEmail(userEmail);
                     setShowEmailPopup(false);
                   } else {
                     alert('Please enter a valid email.');

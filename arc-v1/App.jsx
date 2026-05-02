@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { 
   Sun, 
   Moon, 
@@ -47,6 +47,45 @@ import { fetchFlightStatus } from './src/utils/aviation';
 const DEEPGRAM_API_KEY = import.meta.env.VITE_DEEPGRAM_API_KEY;
 const ONESIGNAL_APP_ID = import.meta.env.VITE_ONESIGNAL_APP_ID;
 const AVIATIONSTACK_API_KEY = import.meta.env.VITE_AVIATIONSTACK_API_KEY;
+
+// Error Boundary Component
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error('App Error:', error, errorInfo);
+    // Log to Supabase or external service if needed
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen flex flex-col items-center justify-center bg-white dark:bg-navy-900 p-8">
+          <div className="text-center space-y-4">
+            <AlertCircle className="w-16 h-16 text-red-500 mx-auto" />
+            <h1 className="text-2xl font-black dark:text-white">Something went wrong</h1>
+            <p className="text-slate-500 dark:text-slate-400">The application encountered an unexpected error. We've logged the issue and are working on it.</p>
+            <button 
+              onClick={() => window.location.reload()} 
+              className="px-6 py-3 bg-blue-600 text-white rounded-2xl font-bold"
+            >
+              Reset Application
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 // Utility for safe JSON parsing
 const safeJsonParse = (str, fallback) => {
@@ -2082,5 +2121,13 @@ export default function App() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function AppWrapper() {
+  return (
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   );
 }

@@ -64,6 +64,10 @@ export default function App() {
     return safeJsonParse(saved, window.matchMedia('(prefers-color-scheme: dark)').matches);
   });
 
+  const isSessionActiveRef = useRef(false);
+  const scrollViewRef = useRef(null);
+  const latencyIntervalRef = useRef(null);
+
   const [status, setStatus] = useState('Ready');
   const [isSessionActive, setIsSessionActive] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
@@ -79,7 +83,6 @@ export default function App() {
   const [isDualMode, setIsDualMode] = useState(false);
   const [latencyTimer, setLatencyTimer] = useState(0);
   const [showLatencyTimer, setShowLatencyTimer] = useState(false);
-  const latencyIntervalRef = useRef(null);
 
   const startLatencyTimer = () => {
     setLatencyTimer(0);
@@ -111,9 +114,17 @@ export default function App() {
     return localStorage.getItem('currentView') || 'landing';
   });
 
+  const [authView, setAuthView] = useState(() => {
+    return localStorage.getItem('authView') || 'login';
+  });
+
   useEffect(() => {
     localStorage.setItem('currentView', currentView);
   }, [currentView]);
+
+  useEffect(() => {
+    localStorage.setItem('authView', authView);
+  }, [authView]);
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authName, setAuthName] = useState('');
@@ -428,9 +439,6 @@ export default function App() {
       });
     }
   }, [messages, currentSessionId, currentSessionName]);
-
-  const isSessionActiveRef = useRef(false);
-  const scrollViewRef = useRef(null);
 
   const toggleSession = () => {
     const nextActive = !isSessionActive;
@@ -1081,14 +1089,6 @@ export default function App() {
   }
 
   // Render Landing Page
-  const [authView, setAuthView] = useState(() => {
-    return localStorage.getItem('authView') || 'login';
-  });
-
-  useEffect(() => {
-    localStorage.setItem('authView', authView);
-  }, [authView]);
-
   const handleLogin = async () => {
     if (!authEmail || !authPassword) {
       alert('Please fill in all fields.');

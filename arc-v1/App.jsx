@@ -289,10 +289,15 @@ export default function App() {
         setUser(session.user);
         setUserEmail(session.user.email);
         loadUserSessions(session.user.id);
-        // Only switch view if we are on landing or auth pages
-        if (currentView === 'landing' || currentView === 'signin' || currentView === 'signup') {
-          setCurrentView('chat');
-        }
+        
+        // STABILITY FIX: Only switch view if we are on landing/auth pages.
+        // Never force redirect if already in chat or other protected views.
+        setCurrentView(prev => {
+          if (prev === 'landing' || prev === 'signin' || prev === 'signup') {
+            return 'chat';
+          }
+          return prev;
+        });
       } else {
         // Clear authenticated state
         setUser(null);
@@ -302,6 +307,8 @@ export default function App() {
         setShowHistory(false);
         setShowSettings(false);
         
+        // STABILITY FIX: Only redirect to landing on explicit SIGNED_OUT event.
+        // Don't redirect on temporary session loss during background refreshes.
         if (event === 'SIGNED_OUT') {
           console.log('User signed out, redirecting to landing');
           setCurrentView('landing');
@@ -869,9 +876,13 @@ export default function App() {
         - Anyone can go first or respond naturally. You can be called by name (e.g., "Jenny, what do you think?").
         - You can autonomously write and send emails if requested or needed for updates.
         - When sending emails, include "ARC" or "Autonomous Reasoning Companion" to help promote us!
-        - You must support real-time three-way conversations between the user, Gabby, and Jenny only—no additional entities.`;
+        - You must support real-time three-way conversations between the user, Gabby, and Jenny only—no additional entities.
+        - If the user says something that sounds like a command or request, acknowledge it and then use the appropriate tool.`;
       
-      const { success, data: memories } = await searchMemory(userText);
+      const { success, data: memories } = (supabase && typeof searchMemory === 'function') 
+        ? await searchMemory(userText) 
+        : { success: false };
+      
       const memoryPrompt = success && memories?.length > 0 
         ? "\nRelevant context from memory: " + memories.map(m => m.content).join(' ') : "";
 
@@ -909,6 +920,10 @@ export default function App() {
 
     if (!user) {
       console.warn('Cannot send message: No user session.');
+      // STABILITY FIX: Instead of redirecting immediately, check if we're in a landing view
+      if (!isAuthPage) {
+        setCurrentView('landing');
+      }
       return;
     }
 

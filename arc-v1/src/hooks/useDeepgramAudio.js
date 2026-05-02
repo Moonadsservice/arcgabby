@@ -48,21 +48,22 @@ export const useDeepgramAudio = (onTranscript, options = {}) => {
   }, [apiKey]);
 
   const startListening = useCallback(async () => {
-    if (isListening) return;
+    if (isListening || socketRef.current) return;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const socket = new WebSocket('wss://api.deepgram.com/v1/listen', ['token', apiKey]);
 
       socket.onopen = () => {
+        console.log('Deepgram WebSocket opened');
         setStatus('Listening...');
         setIsListening(true);
         const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
         mediaRecorder.addEventListener('dataavailable', (event) => {
-          if (event.data.size > 0 && socket.readyState === 1) {
+          if (event.data.size > 0 && socket.readyState === WebSocket.OPEN) {
             socket.send(event.data);
           }
         });
-        mediaRecorder.start(100); // 100ms chunks as requested for STT
+        mediaRecorder.start(100); 
         mediaRecorderRef.current = mediaRecorder;
       };
 
@@ -75,32 +76,60 @@ export const useDeepgramAudio = (onTranscript, options = {}) => {
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
           silenceTimerRef.current = setTimeout(() => {
             if (currentTranscriptRef.current.trim()) {
-              onTranscript(currentTranscriptRef.current.trim(), 'silence');
-              currentTranscriptRef.current = '';
+              const finalTranscript = currentTranscriptRef.current.trim();
+              currentTranscriptRef.current = ''; // Clear BEFORE callback to avoid race
+              onTranscript(finalTranscript, 'silence');
             }
           }, silenceThreshold);
         }
       };
-      socket.onerror = () => setStatus('Error');
-      socket.onclose = () => {
+
+      socket.onerror = (err) => {
+        console.error('Deepgram WebSocket error:', err);
+        setStatus('Error');
+      };
+
+      socket.onclose = (event) => {
+        console.log('Deepgram WebSocket closed:', event.code, event.reason);
         setIsListening(false);
         setStatus('Ready');
+        socketRef.current = null;
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+          mediaRecorderRef.current.stop();
+        }
       };
       socketRef.current = socket;
     } catch (err) {
+      console.error('Failed to start listening:', err);
       setStatus('Error');
+      setIsListening(false);
+      socketRef.current = null;
     }
   }, [apiKey, isListening, onTranscript, silenceThreshold]);
 
   const stopListening = useCallback(() => {
-    if (mediaRecorderRef.current) {
+    console.log('Stopping Deepgram listening...');
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+    
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
       mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+      mediaRecorderRef.current = null;
     }
-    if (socketRef.current) socketRef.current.close();
-    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    
+    if (socketRef.current) {
+      // Remove onclose listener to prevent state flip-flopping during intentional close
+      socketRef.current.onclose = null;
+      socketRef.current.close();
+      socketRef.current = null;
+    }
+    
     setIsListening(false);
     setStatus('Ready');
+    currentTranscriptRef.current = '';
   }, []);
 
   const speak = useCallback(async (text, personality = 'Jenny') => {

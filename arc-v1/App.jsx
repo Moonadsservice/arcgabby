@@ -97,7 +97,7 @@ const safeJsonParse = (str, fallback) => {
   }
 };
 
-export default function App() {
+function App() {
   const [isDarkMode, setIsDarkMode] = useState(() => {
     const saved = localStorage.getItem('darkMode');
     return safeJsonParse(saved, true); // Dark mode by default as requested

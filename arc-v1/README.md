@@ -42,9 +42,34 @@ To learn more about developing your project with Expo, look at the following res
 - [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
 - [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
 
-## Join the community
+## Multi-Character Conversation System
 
-Join our community of developers creating universal apps.
+### Latency Budgets
+- **First Meaningful Token**: < 2s (95th percentile).
+- **Voice Playback**: Starts within 4s of user finishing speech.
+- **Thinking Indicator**: Appears within 300ms of user input.
+- **Latency Timer**: A visible countdown appears if response time exceeds 3s.
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+### Retry Policy
+- **Exponential Backoff**:
+  - Max Attempts: 3
+  - Initial Delay: 500ms
+  - Multiplier: 2x
+- **Timeouts**: 5s per request.
+- **Fallbacks**: Gemini -> Groq -> Graceful Persona Message.
+
+### Voice Pipeline
+- **TTS Caching**: Audio is cached based on a hash of the persona and text content.
+- **Streaming**: STT chunks are processed every 100ms.
+- **TTS Fallback**: If generation exceeds 3s, a "please wait" audio prompt is played from cache.
+
+### Observability & Metrics
+Metrics are exported locally and can be adapted for Prometheus:
+- `conversation_latency_ms`: Measured for every AI response.
+- `brain_response_errors_total`: Total count of failed backend requests.
+- `tts_fallback_count`: Count of times the "please wait" fallback was triggered.
+- **Alerting**: System alerts if error rate exceeds 5% over a 2-minute window.
+
+### Testing
+- **Unit Tests**: Run `npm test` to verify routing, retry, and caching logic.
+- **Load Tests**: Use the provided `load-test.js` with k6: `k6 run load-test.js`.

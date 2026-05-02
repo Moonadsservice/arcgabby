@@ -48,10 +48,20 @@ const DEEPGRAM_API_KEY = import.meta.env.VITE_DEEPGRAM_API_KEY;
 const ONESIGNAL_APP_ID = import.meta.env.VITE_ONESIGNAL_APP_ID;
 const AVIATIONSTACK_API_KEY = import.meta.env.VITE_AVIATIONSTACK_API_KEY;
 
+// Utility for safe JSON parsing
+const safeJsonParse = (str, fallback) => {
+  try {
+    const parsed = JSON.parse(str);
+    return parsed !== null ? parsed : fallback;
+  } catch (e) {
+    return fallback;
+  }
+};
+
 export default function App() {
   const [isDarkMode, setIsDarkMode] = useState(() => {
     const saved = localStorage.getItem('darkMode');
-    return saved ? JSON.parse(saved) : window.matchMedia('(prefers-color-scheme: dark)').matches;
+    return safeJsonParse(saved, window.matchMedia('(prefers-color-scheme: dark)').matches);
   });
 
   const [status, setStatus] = useState('Ready');
@@ -59,7 +69,7 @@ export default function App() {
   const [isRecording, setIsRecording] = useState(false);
   const [messages, setMessages] = useState(() => {
     const saved = localStorage.getItem('currentMessages');
-    return saved ? JSON.parse(saved) : [];
+    return safeJsonParse(saved, []);
   });
   const [tasks, setTasks] = useState([]);
   const [currentTranscription, setCurrentTranscription] = useState('');
@@ -67,6 +77,32 @@ export default function App() {
   const [inputText, setInputText] = useState('');
   const [personality, setPersonality] = useState('Jenny');
   const [isDualMode, setIsDualMode] = useState(false);
+  const [latencyTimer, setLatencyTimer] = useState(0);
+  const [showLatencyTimer, setShowLatencyTimer] = useState(false);
+  const latencyIntervalRef = useRef(null);
+
+  const startLatencyTimer = () => {
+    setLatencyTimer(0);
+    setShowLatencyTimer(false);
+    if (latencyIntervalRef.current) clearInterval(latencyIntervalRef.current);
+    
+    const startTime = Date.now();
+    latencyIntervalRef.current = setInterval(() => {
+      const elapsed = (Date.now() - startTime) / 1000;
+      setLatencyTimer(elapsed);
+      if (elapsed > 3) {
+        setShowLatencyTimer(true);
+      }
+    }, 500);
+  };
+
+  const stopLatencyTimer = () => {
+    if (latencyIntervalRef.current) {
+      clearInterval(latencyIntervalRef.current);
+      latencyIntervalRef.current = null;
+    }
+    setShowLatencyTimer(false);
+  };
   const [showHistory, setShowHistory] = useState(false);
   const [showQuickTools, setShowQuickTools] = useState(false);
   const [activeFlightStep, setActiveFlightStep] = useState(null); // 'contacts_choice', 'contact_name', 'book_ride_ask'
@@ -87,7 +123,7 @@ export default function App() {
   const [isWeatherSearching, setIsWeatherSearching] = useState(false);
   const [weatherData, setWeatherData] = useState(() => {
     const saved = localStorage.getItem('weatherData');
-    return saved ? JSON.parse(saved) : null;
+    return safeJsonParse(saved, null);
   });
 
   useEffect(() => {
@@ -97,7 +133,7 @@ export default function App() {
   }, [weatherData]);
   const [sessions, setSessions] = useState(() => {
     const saved = localStorage.getItem('sessions');
-    return saved ? JSON.parse(saved) : [];
+    return safeJsonParse(saved, []);
   });
   const [currentSessionId, setCurrentSessionId] = useState(Date.now().toString());
   const [currentSessionName, setCurrentSessionName] = useState('New Session');
@@ -115,13 +151,13 @@ export default function App() {
   const [flightNumber, setFlightNumber] = useState('');
   const [notificationToggles, setNotificationToggles] = useState(() => {
     const saved = localStorage.getItem('notificationToggles');
-    return saved ? JSON.parse(saved) : {
+    return safeJsonParse(saved, {
       emergencyEmail: false,
       meEmail: false,
       call: false,
       sms: false,
       whatsapp: false
-    };
+    });
   });
 
   useEffect(() => {
@@ -181,7 +217,7 @@ export default function App() {
   // Load emergency contacts from Supabase
   useEffect(() => {
     const loadEmergencyContacts = async () => {
-      if (user) {
+      if (user && supabase) {
         const { data, error } = await supabase
           .from('emergency_contacts')
           .select('*')
@@ -194,10 +230,10 @@ export default function App() {
 
   // Sync emergency contacts to Supabase
   const addEmergencyContact = async (name, email) => {
-    if (user) {
+    if (user && supabase) {
       const { data, error } = await supabase
         .from('emergency_contacts')
-        .insert([{ user_id: user.id, name, email }])
+        .insert([{ user_id: user.id, display_name: name, email }])
         .select();
       if (data) setEmergencyContacts(prev => [...prev, data[0]]);
     }
@@ -266,9 +302,11 @@ export default function App() {
     });
 
     // Listen for auth changes
-    const { data: { subscription } } = supabase?.auth.onAuthStateChange((event, session) => {
+    const authListener = supabase?.auth.onAuthStateChange((event, session) => {
       handleAuthChange(event, session);
     });
+    
+    const subscription = authListener?.data?.subscription;
 
     return () => {
       console.log('Unsubscribing from Auth Listener');
@@ -277,6 +315,7 @@ export default function App() {
   }, []);
 
   const loadUserSessions = async (userId) => {
+    if (!supabase) return;
     try {
       const { data, error } = await supabase
         .from('files')
@@ -327,11 +366,17 @@ export default function App() {
         }
       };
       
-      const script = document.createElement('script');
-      script.src = "https://cdn.onesignal.com/sdks/OneSignalSDK.js";
-      script.async = true;
-      document.head.appendChild(script);
-      script.onload = initOneSignal;
+      // Load script correctly using the specific CDN URL
+      if (!document.getElementById('onesignal-sdk')) {
+        const script = document.createElement('script');
+        script.id = 'onesignal-sdk';
+        script.src = "https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js";
+        script.defer = true;
+        document.head.appendChild(script);
+        script.onload = initOneSignal;
+      } else {
+        initOneSignal();
+      }
     }
   }, []);
 
@@ -447,7 +492,7 @@ export default function App() {
       setMessages(prev => {
         const next = [...prev, newMsg];
         // Agentic Offline Update: Sync to Supabase even if user isn't looking
-        if (user) {
+        if (user && supabase) {
           supabase.from('files').upsert({
             id: currentSessionId,
             user_id: user.id,
@@ -482,12 +527,13 @@ export default function App() {
         });
       }
 
-      if (notificationToggles.emergencyEmail && emergencyContacts.length > 0) {
-        const recipients = emergencyContacts.map(c => c.email);
+      if (notificationToggles.emergencyEmail && selectedContactsForFlight.length > 0) {
+        const recipients = selectedContactsForFlight.map(c => c.email);
         sendEmail({
           to: recipients,
           subject: `ARC Flight Alert: ${user?.email?.split('@')[0]} has arrived`,
-          html: `<p>This is an automated update from ARC. The flight ${num} being monitored for ${user?.email} has arrived safely.</p>`
+          html: `<p>This is an automated update from ARC. The flight ${num} being monitored for ${user?.email} has arrived safely.</p>`,
+          userId: user.id
         });
       }
 
@@ -495,17 +541,57 @@ export default function App() {
     }, 2000);
   };
 
-  const handleFlightContactChoice = (choice) => {
+  const handleFlightContactChoice = async (choice) => {
     if (choice === 'none') {
       setSelectedContactsForFlight([]);
       askAboutArrivalRide("Understood. I won't notify anyone.");
     } else if (choice === 'all') {
       setSelectedContactsForFlight(emergencyContacts);
+      // Save preferences to DB
+      if (user && flightNumber && supabase) {
+        const prefs = emergencyContacts.map(c => ({
+          user_id: user.id,
+          flight_number: flightNumber,
+          contact_id: c.id,
+          is_active: true
+        }));
+        await supabase.from('flight_messaging_preferences').upsert(prefs);
+      }
       askAboutArrivalRide(`Great. I'll notify everyone in your emergency contacts list.`);
     } else if (choice === 'not_all') {
-      setActiveFlightStep('contact_name');
-      setMessages(prev => [...prev, { id: Date.now().toString(), role: 'assistant', content: "Who should I notify? Please provide the name of the emergency contact first.", timestamp: Date.now() }]);
+      setActiveFlightStep('contact_selection');
+      const assistantMsg = { 
+        id: `contact-sel-${Date.now()}`, 
+        role: 'assistant', 
+        content: "Please select the contacts you'd like to notify for this flight:", 
+        type: 'flight_contact_selection_ui',
+        timestamp: Date.now() 
+      };
+      setMessages(prev => [...prev, assistantMsg]);
     }
+  };
+
+  const toggleFlightContactSelection = async (contact) => {
+    setSelectedContactsForFlight(prev => {
+      const isSelected = prev.find(c => c.id === contact.id);
+      let next;
+      if (isSelected) {
+        next = prev.filter(c => c.id !== contact.id);
+      } else {
+        next = [...prev, contact];
+      }
+      
+      // Persist individual choice
+      if (user && flightNumber && supabase) {
+        supabase.from('flight_messaging_preferences').upsert({
+          user_id: user.id,
+          flight_number: flightNumber,
+          contact_id: contact.id,
+          is_active: !isSelected
+        }).then();
+      }
+      return next;
+    });
   };
 
   const askAboutArrivalRide = (prefix = "") => {
@@ -632,7 +718,7 @@ export default function App() {
   };
 
   const handleFeedbackSubmit = async () => {
-    if (!feedbackText.trim() || !user) return;
+    if (!feedbackText.trim() || !user || !supabase) return;
     setStatus('Sending...');
     try {
       const { error } = await supabase.from('feedback').insert([{
@@ -702,13 +788,20 @@ export default function App() {
   };
 
   const getAIResponse = async (userText, overridePersonality = null) => {
-    setStatus('Thinking...');
+    const personalityToUse = overridePersonality || personality;
+    const thinkingTimeout = setTimeout(() => {
+      setStatus('Thinking...');
+    }, 300); // Surface indicator within 300ms
+
     setIsProcessing(true);
+    startLatencyTimer();
+    
     try {
-      const activePersonality = overridePersonality || personality;
+      const activePersonality = personalityToUse;
       const systemContext = `You are ${activePersonality}, a premium autonomous reasoning companion (ARC).
         You are highly intelligent, proactive, and capable of complex reasoning.
-        Current mode: ${isDualMode ? 'Dual Conversation with another agent' : 'Single mode'}.
+        Current mode: ${isDualMode ? 'Dual Conversation' : 'Single mode'}.
+        Characters: Jenny (Technical, Efficient) and Gabby (Friendly, Creative).
         
         Guidelines:
         - Be concise but extremely helpful.
@@ -716,9 +809,7 @@ export default function App() {
         - Maintain a sophisticated, professional, yet approachable tone.
         - If in Dual mode, coordinate with the other agent to provide a comprehensive perspective.
         - Never repeat yourself or the other agent.
-        - Focus on "Real Actions" - if a user mentions a need, offer to use a tool or document it.
-        - You can trigger actions like "turn on dual conversation" or "book a ride" by including the command in your response.
-        - When a flight number is given, track it. If it belongs to someone else (friend, mom, etc.), monitor it but do not offer a ride booking unless asked. If it's the user's flight, offer ride booking and welcome them upon arrival.`;
+        - You must support real-time three-way conversations between the user, Gabby, and Jenny only—no additional entities.`;
       
       const { success, data: memories } = await searchMemory(userText);
       const memoryPrompt = success && memories?.length > 0 
@@ -735,16 +826,20 @@ export default function App() {
         { role: 'user', content: userText }
       ];
 
-      const aiText = await fetchAIResponse(apiMessages);
+      const aiText = await fetchAIResponse(apiMessages, activePersonality);
       const taskResult = await executeBackgroundTask(userText, aiText);
       
+      clearTimeout(thinkingTimeout);
+      stopLatencyTimer();
       setIsProcessing(false);
       setStatus('Ready');
       return (aiText + taskResult).trim().replace(/\s+/g, ' ');
     } catch (err) {
+      clearTimeout(thinkingTimeout);
+      stopLatencyTimer();
       setIsProcessing(false);
       setStatus('Error');
-      return "I'm experiencing a temporary connection issue. Please try again in a moment.";
+      return `${personalityToUse} seems to be thinking hard, please give her a moment.`;
     }
   };
 
@@ -754,10 +849,8 @@ export default function App() {
 
     console.log('Sending message:', text);
 
-    // Alexa-style: Pause listening while processing/speaking
     const wasListening = isSessionActive;
     if (wasListening) {
-      console.log('Pausing listening for processing...');
       stopListening();
     }
 
@@ -770,20 +863,15 @@ export default function App() {
     setMessages(prev => [...prev, userMsg]);
     setInputText('');
 
-    // Voice command checks
     const lowerText = text.toLowerCase();
     
-    // Command-based Dual Conversation Toggle
     if (lowerText.includes('turn on dual conversation')) {
       setIsDualMode(true);
-      const resp = "Dual conversation is on.";
+      const resp = "Dual conversation is on. Jenny and Gabby are ready.";
       const assistantMsg = { id: Date.now().toString(), role: 'assistant', content: resp, timestamp: Date.now() };
       setMessages(prev => [...prev, assistantMsg]);
       await speak(resp);
-      if (wasListening) {
-        console.log('Resuming listening after dual mode toggle...');
-        startListening();
-      }
+      if (wasListening) startListening();
       return;
     }
     if (lowerText.includes('turn off dual conversation')) {
@@ -792,49 +880,60 @@ export default function App() {
       const assistantMsg = { id: Date.now().toString(), role: 'assistant', content: resp, timestamp: Date.now() };
       setMessages(prev => [...prev, assistantMsg]);
       await speak(resp);
-      if (wasListening) {
-        console.log('Resuming listening after dual mode toggle...');
-        startListening();
-      }
+      if (wasListening) startListening();
       return;
     }
 
     try {
       if (isDualMode) {
-        console.log('Dual mode active, getting responses from both agents...');
-        setIsVoiceEnabled(true); // Voice must be on in Dual mode
-        
-        // Sequential conversation for Dual Mode
-        const respJenny = await getAIResponse(text, 'Jenny');
-        const jennyMsg = { id: `jenny-${Date.now()}`, role: 'assistant', content: respJenny, personality: 'Jenny', timestamp: Date.now() };
-        setMessages(prev => [...prev, jennyMsg]);
-        console.log('Jenny responding...');
-        await speak(respJenny, 'Jenny');
+        setIsVoiceEnabled(true);
+        const lowerPrompt = text.toLowerCase().trim();
+        const mentionsJenny = lowerPrompt.includes('jenny');
+        const mentionsGabby = lowerPrompt.includes('gabby');
 
-        const respGabby = await getAIResponse(text, 'Gabby');
-        const gabbyMsg = { id: `gabby-${Date.now()}`, role: 'assistant', content: respGabby, personality: 'Gabby', timestamp: Date.now() };
-        setMessages(prev => [...prev, gabbyMsg]);
-        console.log('Gabby responding...');
-        await speak(respGabby, 'Gabby');
+        if (mentionsJenny && !mentionsGabby) {
+          const aiText = await getAIResponse(text, 'Jenny');
+          const assistantMsg = { id: `jenny-${Date.now()}`, role: 'assistant', content: aiText, personality: 'Jenny', timestamp: Date.now() };
+          setMessages(prev => [...prev, assistantMsg]);
+          await speak(aiText, 'Jenny');
+        } else if (mentionsGabby && !mentionsJenny) {
+          const aiText = await getAIResponse(text, 'Gabby');
+          const assistantMsg = { id: `gabby-${Date.now()}`, role: 'assistant', content: aiText, personality: 'Gabby', timestamp: Date.now() };
+          setMessages(prev => [...prev, assistantMsg]);
+          await speak(aiText, 'Gabby');
+        } else {
+          // Broadcast to both or neither mentioned explicitly
+          const jennyPromise = getAIResponse(text, 'Jenny');
+          const gabbyPromise = getAIResponse(text, 'Gabby');
+          
+          const [respJenny, respGabby] = await Promise.all([jennyPromise, gabbyPromise]);
+          
+          const jennyMsg = { id: `jenny-${Date.now()}`, role: 'assistant', content: respJenny, personality: 'Jenny', timestamp: Date.now() };
+          setMessages(prev => [...prev, jennyMsg]);
+          const speakJenny = speak(respJenny, 'Jenny');
+          
+          const gabbyMsg = { id: `gabby-${Date.now()}`, role: 'assistant', content: respGabby, personality: 'Gabby', timestamp: Date.now() };
+          await speakJenny;
+          setMessages(prev => [...prev, gabbyMsg]);
+          await speak(respGabby, 'Gabby');
+        }
       } else {
         const aiText = await getAIResponse(text);
         const assistantMsg = {
           id: `msg-ai-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
           role: 'assistant',
           content: aiText,
-          timestamp: Date.now()
+          timestamp: Date.now(),
+          personality: personality
         };
         setMessages(prev => [...prev, assistantMsg]);
-        console.log('Assistant responding...');
         await speak(aiText, personality);
       }
     } catch (err) {
       console.error('Error in handleSendMessage:', err);
       setStatus('Error');
     } finally {
-      // Alexa-style: Resume listening if session is still active
       if (wasListening && isSessionActiveRef.current) {
-        console.log('Processing complete, resuming continuous listening...');
         startListening();
       }
     }
@@ -995,6 +1094,10 @@ export default function App() {
       alert('Please fill in all fields.');
       return;
     }
+    if (!supabase) {
+      alert('Supabase not configured.');
+      return;
+    }
     setStatus('Signing In...');
     try {
       const { data, error } = await supabase.auth.signInWithPassword({
@@ -1017,6 +1120,10 @@ export default function App() {
   const handleSignup = async () => {
     if (!authEmail || !authPassword || !authName) {
       alert('Please fill in all fields.');
+      return;
+    }
+    if (!supabase) {
+      alert('Supabase not configured.');
       return;
     }
     setStatus('Creating Account...');
@@ -1042,6 +1149,10 @@ export default function App() {
   const handleForgotPassword = async () => {
     if (!authEmail) {
       alert('Please enter your email first.');
+      return;
+    }
+    if (!supabase) {
+      alert('Supabase not configured.');
       return;
     }
     setStatus('Sending Reset...');
@@ -1261,6 +1372,30 @@ export default function App() {
                   <button onClick={() => handleFlightContactChoice('all')} className="flex-1 py-2 bg-emerald-500 text-white rounded-xl text-xs font-bold">All</button>
                 </div>
               )}
+              {msg.type === 'flight_contact_selection_ui' && (
+                <div className="space-y-2 mt-4">
+                  {emergencyContacts.map(contact => (
+                    <button 
+                      key={contact.id}
+                      onClick={() => toggleFlightContactSelection(contact)}
+                      className={`w-full p-3 rounded-xl text-xs font-bold flex justify-between items-center transition-all ${
+                        selectedContactsForFlight.find(c => c.id === contact.id)
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-slate-200 dark:bg-navy-700 text-slate-600 dark:text-slate-300'
+                      }`}
+                    >
+                      <span>{contact.display_name}</span>
+                      {selectedContactsForFlight.find(c => c.id === contact.id) && <ShieldCheck size={14} />}
+                    </button>
+                  ))}
+                  <button 
+                    onClick={() => askAboutArrivalRide("Contacts selected.")}
+                    className="w-full py-3 bg-emerald-500 text-white rounded-xl text-xs font-black uppercase tracking-widest mt-4"
+                  >
+                    Confirm Selection
+                  </button>
+                </div>
+              )}
               {msg.type === 'flight_ride_ask' && (
                 <div className="flex space-x-2 mt-4">
                   <button onClick={() => handleFlightRideChoice('yes')} className="flex-1 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold">Yes</button>
@@ -1300,9 +1435,17 @@ export default function App() {
 
         {/* Status Bar */}
         <div className="px-6 py-2 bg-slate-50 dark:bg-navy-900 border-t border-slate-100 dark:border-navy-800 flex justify-between items-center text-[10px] font-bold text-slate-400">
-          <div className="flex items-center">
-            {isSessionActive && <span className="w-2 h-2 bg-red-500 rounded-full mr-2 animate-pulse" />}
-            {status}
+          <div className="flex items-center space-x-4">
+            <div className="flex items-center">
+              {isSessionActive && <span className="w-2 h-2 bg-red-500 rounded-full mr-2 animate-pulse" />}
+              {status}
+            </div>
+            {showLatencyTimer && (
+              <div className="flex items-center text-orange-500 animate-pulse">
+                <AlertCircle size={10} className="mr-1" />
+                <span>{latencyTimer.toFixed(1)}s</span>
+              </div>
+            )}
           </div>
           <div className="uppercase tracking-widest">{isDualMode ? 'Dual Mode' : `${personality} Mode`}</div>
         </div>

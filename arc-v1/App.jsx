@@ -958,8 +958,48 @@ function App() {
         { role: 'user', content: userText }
       ];
 
-      const aiText = await fetchAIResponse(apiMessages, activePersonality);
-      const taskResult = await executeBackgroundTask(userText, aiText);
+      const aiResponse = await fetchAIResponse(apiMessages, activePersonality);
+      
+      let aiText = "";
+      let taskResult = "";
+
+      if (typeof aiResponse === 'object' && aiResponse.type === 'tool_call') {
+        aiText = aiResponse.text;
+        // Execute the structured tool call
+        switch (aiResponse.name) {
+          case 'send_email':
+            await sendEmail({ ...aiResponse.args, userId: user?.id });
+            taskResult = ` [Autonomous Action: Email sent to ${aiResponse.args.to}]`;
+            break;
+          case 'fetch_weather':
+            const weather = await handleWeatherSearch(aiResponse.args.location);
+            if (weather) {
+              taskResult = ` [Autonomous Action: Weather for ${aiResponse.args.location} retrieved]`;
+            }
+            break;
+          case 'fetch_flight_status':
+            const flight = await handleTrackFlight(aiResponse.args.flight_number);
+            if (flight) {
+              taskResult = ` [Autonomous Action: Flight ${aiResponse.args.flight_number} tracking started]`;
+            }
+            break;
+          case 'book_ride':
+            const { destination, provider } = aiResponse.args;
+            setRideDestination(destination);
+            setSelectedRideProvider(provider);
+            const coords = await geocodeDestination(destination);
+            if (coords) {
+              setShowBookRide(true);
+              taskResult = ` [Autonomous Action: ${provider} booking to ${destination} initiated]`;
+            } else {
+              taskResult = ` [Error: Could not find location ${destination}]`;
+            }
+            break;
+        }
+      } else {
+        aiText = aiResponse;
+        taskResult = await executeBackgroundTask(userText, aiText);
+      }
       
       clearTimeout(thinkingTimeout);
       stopLatencyTimer();
@@ -1451,9 +1491,16 @@ function App() {
 
   // Main Chat View
   return (
-    <div className="h-screen flex flex-col bg-white dark:bg-navy-900 transition-colors">
+    <div className="h-screen flex flex-col bg-white dark:bg-black transition-colors relative overflow-hidden">
+      {/* Premium Animated Background */}
+      <div className="absolute inset-0 pointer-events-none">
+        <div className="absolute -top-[20%] -left-[10%] w-[50%] h-[50%] bg-blue-600/10 blur-[120px] rounded-full animate-pulse" />
+        <div className="absolute -bottom-[20%] -right-[10%] w-[50%] h-[50%] bg-purple-600/10 blur-[120px] rounded-full animate-pulse delay-700" />
+        <div className="absolute top-[30%] left-[40%] w-[30%] h-[30%] bg-emerald-600/5 blur-[100px] rounded-full animate-pulse delay-1000" />
+      </div>
+
       {/* Header */}
-      <header className="p-6 flex justify-between items-center border-b border-slate-100 dark:border-navy-800">
+      <header className="p-6 flex justify-between items-center border-b border-slate-100 dark:border-white/5 backdrop-blur-xl bg-white/70 dark:bg-black/70 z-30">
         <div className="flex items-center space-x-3">
           <div className="w-12 h-12 bg-black rounded-xl flex items-center justify-center overflow-hidden border border-white/10">
             <img src="/assets/images/logo.svg" alt="ARC Logo" className="w-full h-full object-contain" onError={(e) => {
@@ -1518,11 +1565,23 @@ function App() {
           )}
           
           {messages.map((msg) => (
-            <div key={msg.id || `msg-${msg.timestamp || Date.now()}-${Math.random()}`} className={`max-w-[85%] p-4 rounded-3xl ${msg.role === 'user' ? 'ml-auto bg-blue-600 text-white rounded-br-none' : 'mr-auto bg-slate-100 dark:bg-navy-800 dark:text-white rounded-bl-none'}`}>
-              <span className="text-[10px] font-black uppercase opacity-60 mb-1 block">
-                {msg.role === 'user' ? 'You' : (isDualMode ? (msg.personality || 'Agent') : personality)}
-              </span>
-              <p className="text-sm leading-relaxed">{msg.content}</p>
+            <div 
+              key={msg.id || `msg-${msg.timestamp || Date.now()}-${Math.random()}`} 
+              className={`max-w-[85%] p-5 rounded-[28px] shadow-sm backdrop-blur-md border transition-all hover:shadow-md ${
+                msg.role === 'user' 
+                  ? 'ml-auto bg-blue-600/90 text-white rounded-br-none border-blue-500/50' 
+                  : 'mr-auto bg-slate-50/80 dark:bg-white/5 dark:text-white rounded-bl-none border-slate-200/50 dark:border-white/10'
+              }`}
+            >
+              <div className="flex items-center space-x-2 mb-2">
+                <span className="text-[10px] font-black uppercase tracking-widest opacity-60">
+                  {msg.role === 'user' ? 'You' : (isDualMode ? (msg.personality || 'Agent') : personality)}
+                </span>
+                {msg.role !== 'user' && (
+                  <div className={`w-1.5 h-1.5 rounded-full ${isDualMode ? 'bg-emerald-500' : (personality === 'Jenny' ? 'bg-blue-500' : 'bg-pink-500')} animate-pulse`} />
+                )}
+              </div>
+              <p className="text-[15px] leading-relaxed font-medium">{msg.content}</p>
               
               {msg.type === 'flight_contacts_choice' && (
                 <div className="flex space-x-2 mt-4">

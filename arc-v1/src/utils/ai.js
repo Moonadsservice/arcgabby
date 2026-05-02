@@ -79,11 +79,68 @@ export const getAIResponse = async (messages, persona = 'Jenny') => {
     }
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+    
+    // Define tools for Gemini
+    const tools = [
+      {
+        function_declarations: [
+          {
+            name: "send_email",
+            description: "Send an email to a recipient with a subject and HTML content.",
+            parameters: {
+              type: "OBJECT",
+              properties: {
+                to: { type: "STRING", description: "The recipient email address." },
+                subject: { type: "STRING", description: "The subject of the email." },
+                html: { type: "STRING", description: "The HTML content of the email." }
+              },
+              required: ["to", "subject", "html"]
+            }
+          },
+          {
+            name: "fetch_weather",
+            description: "Get the current weather for a specific location.",
+            parameters: {
+              type: "OBJECT",
+              properties: {
+                location: { type: "STRING", description: "The city and country, e.g., London, UK" }
+              },
+              required: ["location"]
+            }
+          },
+          {
+            name: "fetch_flight_status",
+            description: "Get the current status of a flight by its flight number.",
+            parameters: {
+              type: "OBJECT",
+              properties: {
+                flight_number: { type: "STRING", description: "The flight number, e.g., BA123" }
+              },
+              required: ["flight_number"]
+            }
+          },
+          {
+            name: "book_ride",
+            description: "Initiate a ride booking (Uber or Bolt) to a destination.",
+            parameters: {
+              type: "OBJECT",
+              properties: {
+                destination: { type: "STRING", description: "The destination address or place name." },
+                provider: { type: "STRING", enum: ["uber", "bolt"], description: "The ride service provider." }
+              },
+              required: ["destination", "provider"]
+            }
+          }
+        ]
+      }
+    ];
+
     const body = {
       contents: messages.map(m => ({
         role: m.role === 'assistant' ? 'model' : 'user',
         parts: [{ text: m.content }]
       })),
+      tools: tools,
       generationConfig: {
         temperature: 0.7,
         maxOutputTokens: 800,
@@ -98,7 +155,19 @@ export const getAIResponse = async (messages, persona = 'Jenny') => {
       body: JSON.stringify(body)
     }), 'Gemini');
 
-    const content = data.candidates[0]?.content?.parts[0]?.text;
+    const candidate = data.candidates[0];
+    const content = candidate?.content?.parts[0]?.text;
+    const call = candidate?.content?.parts.find(p => p.functionCall);
+
+    if (call) {
+      return {
+        type: 'tool_call',
+        name: call.functionCall.name,
+        args: call.functionCall.args,
+        text: content || `Executing ${call.functionCall.name}...`
+      };
+    }
+
     if (content) return content;
     
     throw new Error('Empty response from Gemini');

@@ -1,163 +1,37 @@
-import React, { useEffect } from 'react';
-import { StyleSheet, View, Text, Dimensions } from 'react-native';
-import Animated, { 
-  useSharedValue, 
-  useAnimatedStyle, 
-  withRepeat, 
-  withTiming, 
-  withSpring,
-  interpolate,
-  Extrapolate
-} from 'react-native-reanimated';
-import { Ionicons } from '@expo/vector-icons';
-
-const { width } = Dimensions.get('window');
+import { useMemo } from 'react';
+import { Mic } from 'lucide-react';
 
 const TranscriptionOverlay = ({ text, isListening, isDarkMode }) => {
-  const pulse = useSharedValue(1);
-
-  useEffect(() => {
-    if (isListening) {
-      pulse.value = withRepeat(
-        withTiming(1.2, { duration: 1000 }),
-        -1,
-        true
-      );
-    } else {
-      pulse.value = withSpring(1);
-    }
-  }, [isListening]);
-
-  const animatedIconStyle = useAnimatedStyle(() => {
-    return {
-      transform: [{ scale: pulse.value }],
-      opacity: interpolate(pulse.value, [1, 1.2], [0.8, 1], Extrapolate.CLAMP)
-    };
-  });
+  const waveBars = useMemo(() => Array.from({ length: 8 }, (_, index) => index + 1), []);
 
   if (!isListening && !text) return null;
 
   return (
-    <Animated.View 
-      style={[
-        styles.overlay, 
-        { backgroundColor: isDarkMode ? 'rgba(15, 23, 42, 0.95)' : 'rgba(248, 250, 252, 0.95)' }
-      ]}
-      entering={withSpring({ opacity: 1 })}
-      exiting={withSpring({ opacity: 0 })}
-    >
-      <View style={styles.content}>
-        <Animated.View style={[styles.micContainer, animatedIconStyle]}>
-          <Ionicons name="mic" size={40} color="#ef4444" />
-        </Animated.View>
-        
-        <Text style={[styles.statusLabel, { color: isDarkMode ? '#94a3b8' : '#64748b' }]}>
-          {isListening ? 'Listening...' : 'Thinking...'}
-        </Text>
-
-        <View style={styles.textContainer}>
-          <Text 
-            style={[
-              styles.transcriptionText, 
-              { color: isDarkMode ? '#f8fafc' : '#1e293b' }
-            ]}
-            numberOfLines={4}
-          >
-            {text || "I'm listening..."}
-          </Text>
-        </View>
-
-        {isListening && (
-          <View style={styles.waveContainer}>
-            {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
-              <WaveBar key={i} index={i} isListening={isListening} />
-            ))}
-          </View>
-        )}
-      </View>
-    </Animated.View>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-950/40 backdrop-blur-sm">
+      <div className={`w-full max-w-3xl rounded-[32px] border p-8 shadow-2xl ${isDarkMode ? 'border-navy-700 bg-navy-900/95 text-white' : 'border-slate-200 bg-white/95 text-slate-900'}`}>
+        <div className="flex flex-col items-center gap-6">
+          <div className={`flex h-20 w-20 items-center justify-center rounded-full ${isListening ? 'bg-red-500/15' : 'bg-slate-200'}`}>
+            <Mic size={36} className="text-red-500" />
+          </div>
+          <p className="text-sm font-black uppercase tracking-[0.3em] text-slate-400">
+            {isListening ? 'Listening...' : 'Thinking...'}
+          </p>
+          <div className={`w-full rounded-3xl p-6 ${isDarkMode ? 'bg-navy-800/90' : 'bg-slate-100'}`}>
+            <p className={`text-center text-lg font-semibold leading-8 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+              {text || "I'm listening..."}
+            </p>
+          </div>
+          {isListening && (
+            <div className="flex items-end justify-center gap-2">
+              {waveBars.map((index) => (
+                <span key={index} className={`block h-10 w-2 rounded-full animate-pulse ${index % 2 === 0 ? 'bg-red-500' : 'bg-red-300'}`} />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 };
-
-const WaveBar = ({ index, isListening }) => {
-  const height = useSharedValue(10);
-
-  useEffect(() => {
-    if (isListening) {
-      height.value = withRepeat(
-        withTiming(10 + Math.random() * 30, { duration: 300 + Math.random() * 500 }),
-        -1,
-        true
-      );
-    } else {
-      height.value = withSpring(10);
-    }
-  }, [isListening]);
-
-  const animatedStyle = useAnimatedStyle(() => ({
-    height: height.value,
-  }));
-
-  return <Animated.View style={[styles.waveBar, animatedStyle]} />;
-};
-
-const styles = StyleSheet.create({
-  overlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    zIndex: 1000,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 30,
-  },
-  content: {
-    alignItems: 'center',
-    width: '100%',
-  },
-  micContainer: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: 'rgba(239, 68, 68, 0.1)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  statusLabel: {
-    fontSize: 14,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 2,
-    marginBottom: 20,
-  },
-  textContainer: {
-    width: '100%',
-    minHeight: 120,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  transcriptionText: {
-    fontSize: 24,
-    fontWeight: '600',
-    textAlign: 'center',
-    lineHeight: 34,
-  },
-  waveContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    height: 60,
-    marginTop: 40,
-  },
-  waveBar: {
-    width: 4,
-    backgroundColor: '#ef4444',
-    marginHorizontal: 3,
-    borderRadius: 2,
-  },
-});
 
 export default TranscriptionOverlay;

@@ -1,10 +1,16 @@
-// https://docs.expo.dev/guides/using-eslint/
 const { defineConfig } = require('eslint/config');
-const expoConfig = require('eslint-config-expo/flat');
 
-module.exports = defineConfig([
-  expoConfig,
-  {
-    ignores: ['dist/*'],
-  },
-]);
+module.exports = defineConfig({
+  ignorePatterns: ['dist/*'],
+  root: true,
+  overrides: [
+    {
+      files: ['**/*.{js,jsx,ts,tsx}'],
+      parserOptions: {
+        sourceType: 'module',
+        ecmaVersion: 'latest',
+        ecmaFeatures: { jsx: true }
+      }
+    }
+  ]
+});

@@ -1,70 +1,80 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Audio } from 'expo-av';
-import { useARC } from '../context/ARCContext';
 
 export const useSilenceDetection = (onSilenceDetected, options = {}) => {
-  const { threshold = -45, duration = 3500 } = options;
-  const lastSpeakTimeRef = useRef(0);
-  const recordingRef = useRef(null);
+  const { duration = 3500 } = options;
   const [isRecording, setIsRecording] = useState(false);
+  const mediaRecorderRef = useRef(null);
+  const streamRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const silenceTimerRef = useRef(null);
 
-  const startRecording = useCallback(async () => {
-    try {
-      const permission = await Audio.requestPermissionsAsync();
-      if (permission.status !== 'granted') return;
-
-      const recordingOptions = {
-        ...Audio.RecordingOptionsPresets.HIGH_QUALITY,
-        isMeteringEnabled: true,
-      };
-
-      const { recording } = await Audio.Recording.createAsync(
-        recordingOptions,
-        (status) => {
-          if (!status.canRecord || !status.isRecording) return;
-
-          const now = Date.now();
-          const metering = status.metering || -160;
-
-          if (metering > threshold) {
-            lastSpeakTimeRef.current = now;
-          } else if (lastSpeakTimeRef.current > 0 && now - lastSpeakTimeRef.current > duration) {
-            stopRecording();
-          }
-        },
-        100
-      );
-
-      recordingRef.current = recording;
-      setIsRecording(true);
-      lastSpeakTimeRef.current = Date.now();
-    } catch (err) {
-      console.error('Failed to start recording', err);
+  const cleanupStream = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
     }
-  }, [onSilenceDetected, threshold, duration]);
+  };
 
   const stopRecording = useCallback(async () => {
-    try {
-      if (!recordingRef.current) return;
-      
-      setIsRecording(false);
-      await recordingRef.current.stopAndUnloadAsync();
-      const uri = recordingRef.current.getURI();
-      recordingRef.current = null;
-      
-      if (uri) {
-        onSilenceDetected(uri);
-      }
-    } catch (err) {
-      console.error('Failed to stop recording', err);
+    if (!mediaRecorderRef.current) return;
+    setIsRecording(false);
+    mediaRecorderRef.current.stop();
+  }, []);
+
+  const startRecording = useCallback(async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      console.warn('Browser does not support audio capture');
+      return;
     }
-  }, [onSilenceDetected]);
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      const recorder = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        audioChunksRef.current = [];
+        if (onSilenceDetected) {
+          const uri = URL.createObjectURL(blob);
+          onSilenceDetected(uri);
+        }
+        cleanupStream();
+      };
+
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+      setIsRecording(true);
+
+      if (silenceTimerRef.current) {
+        window.clearTimeout(silenceTimerRef.current);
+      }
+
+      silenceTimerRef.current = window.setTimeout(() => {
+        stopRecording();
+      }, duration);
+    } catch (err) {
+      console.error('Failed to start recording', err);
+      cleanupStream();
+    }
+  }, [duration, onSilenceDetected, stopRecording]);
 
   useEffect(() => {
     return () => {
-      if (recordingRef.current) {
-        recordingRef.current.stopAndUnloadAsync();
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
       }
+      if (silenceTimerRef.current) {
+        window.clearTimeout(silenceTimerRef.current);
+      }
+      cleanupStream();
     };
   }, []);
 

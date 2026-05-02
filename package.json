@@ -5,11 +5,5 @@
   "scripts": {
     "build": "cd arc-v1 && npm install && npm run build",
     "install": "cd arc-v1 && npm install"
-  },
-  "devDependencies": {
-    "@testing-library/jest-dom": "^6.9.1",
-    "@testing-library/react": "^16.3.2",
-    "jsdom": "^29.1.0",
-    "vitest": "^4.1.5"
   }
 }

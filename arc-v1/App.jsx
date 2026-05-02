@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { 
   Sun, 
   Moon, 
@@ -36,7 +36,7 @@ import {
   Trash2,
   Save
 } from 'lucide-react';
-import { saveMemory, searchMemory, saveUserEmail, supabase } from './src/utils/supabase';
+import { supabase } from './src/utils/supabase';
 import { useDeepgramAudio } from './src/hooks/useDeepgramAudio';
 import { getAIResponse as fetchAIResponse } from './src/utils/ai';
 import { sendEmail } from './src/utils/email';
@@ -61,7 +61,8 @@ const safeJsonParse = (str, fallback) => {
 export default function App() {
   const [isDarkMode, setIsDarkMode] = useState(() => {
     const saved = localStorage.getItem('darkMode');
-    return safeJsonParse(saved, window.matchMedia('(prefers-color-scheme: dark)').matches);
+    const prefersDark = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    return safeJsonParse(saved, prefersDark);
   });
 
   const isSessionActiveRef = useRef(false);
@@ -497,20 +498,7 @@ export default function App() {
       
       const newMsg = { id: Date.now().toString() + '-arrival', role: 'assistant', content: arrivalMsg, timestamp: Date.now() };
       
-      setMessages(prev => {
-        const next = [...prev, newMsg];
-        // Agentic Offline Update: Sync to Supabase even if user isn't looking
-        if (user && supabase) {
-          supabase.from('files').upsert({
-            id: currentSessionId,
-            user_id: user.id,
-            type: 'session',
-            content: next,
-            metadata: { name: currentSessionName, timestamp: Date.now() }
-          }).then();
-        }
-        return next;
-      });
+      setMessages(prev => [...prev, newMsg]);
 
       speak(arrivalMsg, personality);
       
@@ -725,27 +713,11 @@ export default function App() {
     return "";
   };
 
-  const handleFeedbackSubmit = async () => {
-    if (!feedbackText.trim() || !user || !supabase) return;
-    setStatus('Sending...');
-    try {
-      const { error } = await supabase.from('feedback').insert([{
-        user_id: user.id,
-        username: user.user_metadata?.full_name || user.email.split('@')[0],
-        email: user.email,
-        content: feedbackText,
-        created_at: new Date()
-      }]);
-      if (error) throw error;
-      setFeedbackText('');
-      setShowFeedback(false);
-      setStatus('Ready');
-      alert('Feedback sent! Thank you.');
-    } catch (err) {
-      console.error('Feedback Error:', err);
-      alert('Failed to send feedback.');
-      setStatus('Ready');
-    }
+  const handleFeedbackSubmit = () => {
+    if (!feedbackText.trim()) return;
+    setFeedbackText('');
+    setShowFeedback(false);
+    alert('Feedback sent! Thank you.');
   };
 
   const trackFlight = async (num, isMine = true) => {
@@ -795,7 +767,7 @@ export default function App() {
     }
   };
 
-  const getAIResponse = async (userText, overridePersonality = null) => {
+  const handleGetAIResponse = async (userText, overridePersonality = null) => {
     const personalityToUse = overridePersonality || personality;
     const thinkingTimeout = setTimeout(() => {
       setStatus('Thinking...');
@@ -807,29 +779,18 @@ export default function App() {
     try {
       const activePersonality = personalityToUse;
       const systemContext = `You are ${activePersonality}, a premium autonomous reasoning companion (ARC).
-        You are highly intelligent, proactive, and capable of complex reasoning.
-        Current mode: ${isDualMode ? 'Dual Conversation' : 'Single mode'}.
-        Characters: Jenny (Technical, Efficient) and Gabby (Friendly, Creative).
-        
         Guidelines:
         - Be concise but extremely helpful.
         - Use your tools (weather, flight tracking, ride booking) proactively when relevant.
-        - Maintain a sophisticated, professional, yet approachable tone.
-        - If in Dual mode, coordinate with the other agent to provide a comprehensive perspective.
-        - Never repeat yourself or the other agent.
         - You must support real-time three-way conversations between the user, Gabby, and Jenny only—no additional entities.`;
       
-      const { success, data: memories } = await searchMemory(userText);
-      const memoryPrompt = success && memories?.length > 0 
-        ? "\nRelevant context from memory: " + memories.map(m => m.content).join(' ') : "";
-
       const historyMessages = messages.slice(-5).map(m => ({
         role: m.role,
         content: m.content
       }));
 
       const apiMessages = [
-        { role: 'system', content: systemContext + memoryPrompt },
+        { role: 'system', content: systemContext },
         ...historyMessages,
         { role: 'user', content: userText }
       ];
@@ -900,19 +861,19 @@ export default function App() {
         const mentionsGabby = lowerPrompt.includes('gabby');
 
         if (mentionsJenny && !mentionsGabby) {
-          const aiText = await getAIResponse(text, 'Jenny');
+          const aiText = await handleGetAIResponse(text, 'Jenny');
           const assistantMsg = { id: `jenny-${Date.now()}`, role: 'assistant', content: aiText, personality: 'Jenny', timestamp: Date.now() };
           setMessages(prev => [...prev, assistantMsg]);
           await speak(aiText, 'Jenny');
         } else if (mentionsGabby && !mentionsJenny) {
-          const aiText = await getAIResponse(text, 'Gabby');
+          const aiText = await handleGetAIResponse(text, 'Gabby');
           const assistantMsg = { id: `gabby-${Date.now()}`, role: 'assistant', content: aiText, personality: 'Gabby', timestamp: Date.now() };
           setMessages(prev => [...prev, assistantMsg]);
           await speak(aiText, 'Gabby');
         } else {
           // Broadcast to both or neither mentioned explicitly
-          const jennyPromise = getAIResponse(text, 'Jenny');
-          const gabbyPromise = getAIResponse(text, 'Gabby');
+          const jennyPromise = handleGetAIResponse(text, 'Jenny');
+          const gabbyPromise = handleGetAIResponse(text, 'Gabby');
           
           const [respJenny, respGabby] = await Promise.all([jennyPromise, gabbyPromise]);
           
@@ -926,7 +887,7 @@ export default function App() {
           await speak(respGabby, 'Gabby');
         }
       } else {
-        const aiText = await getAIResponse(text);
+        const aiText = await handleGetAIResponse(text);
         const assistantMsg = {
           id: `msg-ai-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
           role: 'assistant',
@@ -960,36 +921,22 @@ export default function App() {
     setNotifications(prev => [newNotification, ...prev]);
   };
 
-  // Sync sessions with Supabase
+  // Local session update
   useEffect(() => {
-    const syncSession = async () => {
-      if (user && messages.length > 0) {
-        try {
-          const { error } = await supabase
-            .from('files')
-            .upsert({
-              id: currentSessionId,
-              user_id: user.id,
-              type: 'session',
-              content: messages,
-              metadata: { 
-                name: currentSessionName, 
-                timestamp: Date.now(),
-                user_email: user.email 
-              }
-            }, { onConflict: 'id' });
-          
-          if (error) throw error;
-          console.log('Session synced to Supabase successfully.');
-        } catch (err) {
-          console.error('Error syncing session to Supabase:', err);
-        }
-      }
-    };
-
-    const timeoutId = setTimeout(syncSession, 1000); // Faster sync
-    return () => clearTimeout(timeoutId);
-  }, [messages, currentSessionId, currentSessionName, user]);
+    if (messages.length > 0) {
+      const sessionToSave = {
+        id: currentSessionId,
+        name: currentSessionName,
+        messages: [...messages],
+        timestamp: Date.now()
+      };
+      setSessions(prev => {
+        const exists = prev.find(s => s.id === currentSessionId);
+        if (exists) return prev.map(s => s.id === currentSessionId ? sessionToSave : s);
+        return [sessionToSave, ...prev];
+      });
+    }
+  }, [messages, currentSessionId, currentSessionName]);
 
   const handleNotificationClick = (n) => {
     setShowNotifications(false);
@@ -1543,7 +1490,6 @@ export default function App() {
                     if (nextVal && !userEmail && user?.email) {
                       setUserEmail(user.email);
                       localStorage.setItem('userEmail', user.email);
-                      saveUserEmail(user.email);
                     } else if (nextVal && !userEmail) {
                       setShowEmailPopup(true);
                     }
@@ -1831,7 +1777,6 @@ export default function App() {
                 onClick={async () => {
                   if (userEmail.includes('@')) {
                     localStorage.setItem('userEmail', userEmail);
-                    await saveUserEmail(userEmail);
                     setShowEmailPopup(false);
                   } else {
                     alert('Please enter a valid email.');
